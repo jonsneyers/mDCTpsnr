@@ -17,8 +17,8 @@
 // The quantization matrices to use
 // This is the DCTune setting.
 #define AHUMADA
-#define AHUMADA_EXPONENT 3.5 // usually 3.5
-#define AHUMADA_FACTOR   1.0 // usually 1.0
+#define AHUMADA_EXPONENT 3.5f // usually 3.5
+#define AHUMADA_FACTOR   1.0f // usually 1.0
 //
 // Shall the probability be weighted with the
 // square error?
@@ -40,7 +40,7 @@
 #define INPUT_GAMMA 1.0
 //
 // The (inverse) base visibility.
-#define BASE_VISIBILITY 0.08
+#define BASE_VISIBILITY 0.08f
 //
 // Detection threshold 
-#define DETECT_THREAS 1.0 //0.75 //1.0 // was: 1.5
+#define DETECT_THREAS 1.0f //0.75 //1.0 // was: 1.5

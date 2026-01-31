@@ -31,10 +31,10 @@
 #define GLOBAL_MATRIXBASE_HPP
 
 /// Includes
-#include "global/types.hpp"
+#include <cstdint>
 #include "global/exceptions.hpp"
-#include "std/stdlib.hpp"
-#include "std/assert.hpp"
+#include <cstdlib>
+#include <cassert>
 ///
 
 /// Matrix base class
@@ -44,13 +44,13 @@ protected:
   // Memory management for the entry data. This holds the memory
   // to be kept here.
   struct MemKeeper {
-    APTR   m_pMem;       // where's the memory held?
-    ULONG  m_ulRefCount; // reference counter
+    void*   m_pMem;       // where's the memory held?
+    uint32_t  m_ulRefCount; // reference counter
     //
     MemKeeper(size_t size)
       : m_pMem(malloc(size)), m_ulRefCount(1)
     { 
-      if (m_pMem == NULL)
+      if (m_pMem == nullptr)
 	Throw(NoMem,"MemKeeper::MemKeeper","out of memory");
     }
     //
@@ -66,10 +66,10 @@ protected:
   // Note that this is in the coefficient type, so you'll need to multiply
   // by sizeof(type) to get the BytesPerRow.
   // Example:  A 4x4 (long) matrix usually has an EntriesPerRow==4.
-  ULONG m_ulEntriesPerRow;
+  uint32_t m_ulEntriesPerRow;
   // The dimensions of the array. Humm, do we need to keep these?
   // At least for consistency checking, we should.
-  ULONG m_ulWidth,m_ulHeight;
+  uint32_t m_ulWidth,m_ulHeight;
   //
   // Build a new matrix allocating the indicated amount of storage.
   MatrixBase(size_t size)
@@ -82,7 +82,7 @@ protected:
   //
   // Construct an empty matrix.
   MatrixBase(void)
-    : m_pMemory(NULL)
+    : m_pMemory(nullptr)
   { 
     m_ulWidth         = 0;
     m_ulHeight        = 0;
@@ -98,7 +98,7 @@ protected:
       //m_pMemory->m_ulRefCount++; // used once more
       m_pMemory         = o.m_pMemory;
     } else {
-      m_pMemory         = NULL;
+      m_pMemory         = nullptr;
     }
     m_ulEntriesPerRow   = o.m_ulEntriesPerRow;
     m_ulWidth           = o.m_ulWidth;
@@ -133,7 +133,7 @@ protected:
   {
     // Release the current memory.
     if (m_pMemory && __sync_sub_and_fetch(&m_pMemory->m_ulRefCount,1) == 0) {
-      delete m_pMemory; m_pMemory = NULL;
+      delete m_pMemory; m_pMemory = nullptr;
     }
     m_pMemory         = new MemKeeper(s);
     m_ulWidth         = 0;
@@ -145,7 +145,7 @@ protected:
   void Release(void)
   {
     if (m_pMemory && __sync_sub_and_fetch(&m_pMemory->m_ulRefCount,1) == 0) {
-      delete m_pMemory; m_pMemory = NULL;
+      delete m_pMemory; m_pMemory = nullptr;
     }
     m_ulWidth         = 0;
     m_ulHeight        = 0;
@@ -164,7 +164,7 @@ public:
   // Return the coordinates given the index.
   // This should be avoided in frequent calling since it
   // requires multiplication and division.
-  void CoordinatesOf(ULONG idx,ULONG &x,ULONG &y) const
+  void CoordinatesOf(uint32_t idx,uint32_t &x,uint32_t &y) const
   {
     y = idx/m_ulEntriesPerRow;
     x = idx-y*m_ulEntriesPerRow;    
@@ -175,18 +175,18 @@ public:
   // established
   bool IsEmpty(void) const
   {
-    return (m_pMemory == NULL);
+    return (m_pMemory == nullptr);
   }
   //
   //
   // Simple dimension querry functions
   //
-  ULONG WidthOf(void) const
+  uint32_t WidthOf(void) const
   {
     return m_ulWidth;
   }
   //
-  ULONG HeightOf(void) const
+  uint32_t HeightOf(void) const
   {
     return m_ulHeight;
   }  

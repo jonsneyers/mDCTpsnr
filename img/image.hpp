@@ -31,8 +31,8 @@
 #define IMG_IMAGE_HPP
 
 /// Includes
-#include "global/types.hpp"
-#include "std/assert.hpp"
+#include <cstdint>
+#include <cassert>
 #include "ctrafo/colortransformer.hpp"
 #include "dct/component.hpp"
 ///
@@ -50,7 +50,7 @@ class Line;
 class Image {
   //
   // Number of components we have here.
-  UWORD             m_usComponents;
+  uint16_t             m_usComponents;
   //
   // An array of components.
   class Component **m_ppDCTArray;
@@ -62,22 +62,22 @@ class Image {
   class ByteStream *m_pIn;
   //
   // The dimension of the image.
-  ULONG             m_ulWidth;
-  ULONG             m_ulHeight;
-  ULONG             m_ulY;
-  UBYTE             m_ucBits;
-  DOUBLE            m_dScaling;
+  uint32_t             m_ulWidth;
+  uint32_t             m_ulHeight;
+  uint32_t             m_ulY;
+  uint8_t             m_ucBits;
+  float            m_dScaling;
   //
   // The color transformer.
   class ColorTransformer m_CTrafo;
   //
   // Service (not required elsewhere): Read an ascii string from the input file,
   // encoding a number. This number gets returned. Throws on error.
-  LONG ReadNumber(class ByteStream *from);
+  int32_t ReadNumber(class ByteStream *from);
   // Write an Ascii string to a bytestream.
-  void WriteNumber(class ByteStream *to,LONG number);
+  void WriteNumber(class ByteStream *to,int32_t number);
   // Read an ASCII encoded floating point number
-  DOUBLE ReadFloat(class ByteStream *from);
+  float ReadFloat(class ByteStream *from);
   // Skip blank spaces in the bytestream.
   void SkipBlanks(class ByteStream *from);
   // Skip comment lines starting with #
@@ -92,13 +92,13 @@ public:
   ~Image(void);
   //
   // Get the number of components in here.
-  UWORD ComponentCountOf(void) const
+  uint16_t ComponentCountOf(void) const
   {
     return m_usComponents;
   }
   //
   // Define the scaling for the PNM probability map.
-  void SetScaling(DOUBLE s)
+  void SetScaling(float s)
   {
     m_dScaling = s;
   }
@@ -110,6 +110,10 @@ public:
   // Load a PFM (extended floating point format used by the Itty/Koch saliency toolkit) image.
   void OpenPFM(class ByteStream *input);
   //
+  // Eagerly allocate all Component buffers (called after OpenPNM, before processing).
+  // After this, all GetDCTBand() calls will eventually return valid pointers (after warmup).
+  void AllocateAllBuffers(void);
+  //
   // Read the next line from the image.
   void ReadNextLine(void);
   //
@@ -118,10 +122,10 @@ public:
   class Line *ReadNextPFMLine(void);
   //
   // Find the scale (maximum number) in the lines of a PFM file.
-  DOUBLE FindScale(void);
+  float FindScale(void);
   //
   // Return the next available DCT output line for the given component and DCT index.
-  // Returns NULL if this line is not yet available.
+  // Returns nullptr if this line is not yet available.
   class Line *GetDCTBand(int h,int v,int component) const
   {
     assert(component < m_usComponents);
@@ -147,7 +151,7 @@ public:
   }
   //
   // Return the width of the image.
-  ULONG WidthOf(void) const
+  uint32_t WidthOf(void) const
   {
     assert(m_pIn);
 
@@ -155,7 +159,7 @@ public:
   }
   //
   // Return the height of the image.
-  ULONG HeightOf(void) const
+  uint32_t HeightOf(void) const
   {
     assert(m_pIn);
 

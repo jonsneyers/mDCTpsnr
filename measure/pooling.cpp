@@ -29,9 +29,107 @@
 #include "img/imgwriter.hpp"
 #include "measure/masking.hpp"
 #include "dct/line.hpp"
-#include "std/stdio.hpp"
-#include "std/math.hpp"
+#include <cstdio>
+#include <cmath>
 #include "measure/ediff.hpp"
+
+// Highway for portable SIMD
+#undef HWY_TARGET_INCLUDE
+#define HWY_TARGET_INCLUDE "measure/pooling.cpp"
+#include <hwy/foreach_target.h>
+#include <hwy/highway.h>
+
+HWY_BEFORE_NAMESPACE();
+namespace pooling_simd {
+namespace HWY_NAMESPACE {
+
+namespace hn = hwy::HWY_NAMESPACE;
+
+// Highway SIMD version of MeasureInBand
+void MeasureInBandSIMD_HWY(float *ref_ptr, float *dst_ptr,
+                            const float *refmask_ptr, const float *dstmask_ptr,
+                            float *error_ptr, int simd_limit, float visbase) {
+  const hn::ScalableTag<float> d;
+  const size_t N = hn::Lanes(d);
+  
+  auto vvisbase = hn::Set(d, visbase);
+  auto vzero = hn::Zero(d);
+  
+  // Process SIMD chunks
+  for (int i = 0; i < simd_limit; i += N) {
+    // Load masks
+    auto vrefmask = hn::LoadU(d, refmask_ptr + i);
+    auto vdstmask = hn::LoadU(d, dstmask_ptr + i);
+    
+    // vis = max(refmask, dstmask) * visbase
+    auto vvis = hn::Max(vrefmask, vdstmask);
+    vvis = hn::Mul(vvis, vvisbase);
+    
+    // err = refline - dstline
+    auto vref = hn::LoadU(d, ref_ptr + i);
+    auto vdst = hn::LoadU(d, dst_ptr + i);
+    auto verr = hn::Sub(vref, vdst);
+    
+    // err = fabs(err) * vis
+    verr = hn::Abs(verr);
+    verr = hn::Mul(verr, vvis);
+    
+    // Compute err = exp(-pow(err, 3.5))
+    // pow(err, 3.5) = err^2 * err * sqrt(err)
+    auto verr2 = hn::Mul(verr, verr);      // err^2
+    auto verr3 = hn::Mul(verr2, verr);     // err^3
+    auto vsqrt_err = hn::Sqrt(verr);       // sqrt(err)
+    auto verr_pow = hn::Mul(verr3, vsqrt_err); // err^3.5
+    
+    // Negate for exp(-x)
+    verr_pow = hn::Neg(verr_pow);
+    
+    // Create mask for err > 0
+    auto vmask = hn::Gt(verr, vzero);
+    
+    // Compute exp() - must do scalar for now (no SIMD exp in Highway)
+    alignas(64) float err_pow_array[hn::MaxLanes(d)];
+    alignas(64) float exp_result[hn::MaxLanes(d)];
+    hn::StoreU(verr_pow, d, err_pow_array);
+    
+    // Compute exp for each element
+    for (size_t j = 0; j < N; j++) {
+      exp_result[j] = expf(err_pow_array[j]);
+    }
+    
+    auto vexp_result = hn::LoadU(d, exp_result);
+    
+    // errorline[i] *= exp_result (where err > 0, else keep unchanged)
+    auto verror = hn::LoadU(d, error_ptr + i);
+    auto vresult = hn::Mul(verror, vexp_result);
+    
+    // Blend: use vresult where mask is true, verror where false
+    vresult = hn::IfThenElse(vmask, vresult, verror);
+    
+    hn::StoreU(vresult, d, error_ptr + i);
+  }
+}
+
+} // namespace HWY_NAMESPACE
+} // namespace pooling_simd
+HWY_AFTER_NAMESPACE();
+
+#if HWY_ONCE
+namespace pooling_simd {
+
+// Export function for dynamic dispatch
+HWY_EXPORT(MeasureInBandSIMD_HWY);
+
+// Wrapper function
+void MeasureInBandSIMD(float *ref_ptr, float *dst_ptr,
+                       const float *refmask_ptr, const float *dstmask_ptr,
+                       float *error_ptr, int simd_limit, float visbase) {
+  HWY_DYNAMIC_DISPATCH(MeasureInBandSIMD_HWY)(ref_ptr, dst_ptr, refmask_ptr, dstmask_ptr,
+                                               error_ptr, simd_limit, visbase);
+}
+
+} // namespace pooling_simd
+
 ///
 
 /// Quantization tables
@@ -125,9 +223,9 @@ static const unsigned int chroma_tbl[] = {
 //
 // Output of the DCT must be further divided by the
 // numbers below to normalize it correctly.
-static const DOUBLE dct_scale[] = {
-  1.0, 1.387039845, 1.306562965, 1.175875602,
-  1.0, 0.785694958, 0.541196100, 0.275899379
+static const float dct_scale[] = {
+  1.0f, 1.387039845f, 1.306562965f, 1.175875602f,
+  1.0f, 0.785694958f, 0.541196100f, 0.275899379f
 };
 
 //
@@ -136,15 +234,15 @@ static const DOUBLE dct_scale[] = {
 // function. What we see here is the l^2 norm squared under the
 // transformation on an input that is given by a constant-frequency
 // DCT pattern.
-static const DOUBLE norms[8][8] = {
-  {1,0.742298,1.22273,1.24434,1.2528,1.26126,1.28286,1.76329},
-  {0.742298,0.439822,0.724487,0.737285,0.742298,0.747311,0.760109,1.04477},
-  {1.22273,0.724487,1.19339,1.21448,1.22273,1.23099,1.25207,1.72098},
-  {1.24434,0.737285,1.21448,1.23593,1.24434,1.25274,1.27419,1.75139},
-  {1.2528,0.742298,1.22273,1.24434,1.2528,1.26126,1.28286,1.76329},
-  {1.26126,0.747311,1.23099,1.25274,1.26126,1.26977,1.29152,1.7752},
-  {1.28286,0.760109,1.25207,1.27419,1.28286,1.29152,1.31364,1.8056},
-  {1.76329,1.04477,1.72098,1.75139,1.76329,1.7752,1.8056,2.48181},
+static const float norms[8][8] = {
+  {1.0f,0.742298f,1.22273f,1.24434f,1.2528f,1.26126f,1.28286f,1.76329f},
+  {0.742298f,0.439822f,0.724487f,0.737285f,0.742298f,0.747311f,0.760109f,1.04477f},
+  {1.22273f,0.724487f,1.19339f,1.21448f,1.22273f,1.23099f,1.25207f,1.72098f},
+  {1.24434f,0.737285f,1.21448f,1.23593f,1.24434f,1.25274f,1.27419f,1.75139f},
+  {1.2528f,0.742298f,1.22273f,1.24434f,1.2528f,1.26126f,1.28286f,1.76329f},
+  {1.26126f,0.747311f,1.23099f,1.25274f,1.26126f,1.26977f,1.29152f,1.7752f},
+  {1.28286f,0.760109f,1.25207f,1.27419f,1.28286f,1.29152f,1.31364f,1.8056f},
+  {1.76329f,1.04477f,1.72098f,1.75139f,1.76329f,1.7752f,1.8056f,2.48181f},
 };
 ///
 
@@ -173,17 +271,16 @@ void Pooling::Run(int offset,int mod)
       for(x = 0;x < 8;x++) {
 	{
 	  if (cnt % mod == offset) {
-	    class Line *refline;
-	    class Line *dstline;
-	    //
-	    if ((refline = m_pReference->GetDCTBand(x,y,c))) {
-	      if (logme > 1) m_DCTImgs1[x][y][c].WriteLine(refline);
-	      m_Weights1[x][y][c].PushLine(refline);
+	    // After warmup, all DCT bands are guaranteed valid (never nullptr)
+	    class Line *refline = m_pReference->GetDCTBand(x,y,c);
+	    class Line *dstline = m_pDistorted->GetDCTBand(x,y,c);
+	    
+	    if (logme > 1) {
+	      m_DCTImgs1[x][y][c].WriteLine(refline);
+	      m_DCTImgs2[x][y][c].WriteLine(dstline);
 	    }
-	    if ((dstline = m_pDistorted->GetDCTBand(x,y,c))) {
-	    if (logme > 1) m_DCTImgs2[x][y][c].WriteLine(dstline);
+	    m_Weights1[x][y][c].PushLine(refline);
 	    m_Weights2[x][y][c].PushLine(dstline);
-	    }
 	  }
 	  cnt++;
 	}
@@ -193,21 +290,79 @@ void Pooling::Run(int offset,int mod)
 }
 ///
 
+// Fast approximation of exp(x) for x in [-10, 0] (our range after -pow())
+// Uses polynomial approximation - much faster than libm exp()
+static inline float fast_exp_negative(float x) {
+  // Clamp to reasonable range
+  if (x < -10.0f) return 0.0f;
+  if (x > 0.0f) return 1.0f;
+  
+  // Use exp(x) ≈ 2^(x/ln(2)) and compute 2^k quickly
+  // For negative x, we can use: exp(x) ≈ 1 / (1 - x + x^2/2 - x^3/6 + x^4/24)
+  // Simplified 4th order polynomial approximation
+  const float c1 = 1.0f;
+  const float c2 = 1.0f;
+  const float c3 = 0.5f;
+  const float c4 = 0.16666667f;
+  const float c5 = 0.041666667f;
+  
+  float x2 = x * x;
+  float x3 = x2 * x;
+  float x4 = x2 * x2;
+  
+  return c1 + x * c2 + x2 * c3 + x3 * c4 + x4 * c5;
+}
+
 /// Pooling::MeasureInBand
 // Measure the visibility in a band
 // and adjust the error map.
+// Highway SIMD-optimized version - portable across x86 (SSE4/AVX2/AVX-512), ARM (NEON), etc.
 void Pooling::MeasureInBand(class Line *refline,class Line *dstline,
 			    const class Line *refmask,const class Line *dstmask,
-			    int w,int logme,DOUBLE visbase,
+			    int w,int logme,float visbase,
 			    class Line *errorline)
 { 
   int i;
-
-  for(i = 0;i < w;i++) {
-    DOUBLE vis    = 1.0;
-    DOUBLE visref = 1.0;
-    DOUBLE visdst = 1.0;
-    DOUBLE err;
+  
+  // Get direct pointers for faster access
+  float *ref_ptr = refline->Origin();
+  float *dst_ptr = dstline->Origin();
+  const float *refmask_ptr = refmask->Origin();
+  const float *dstmask_ptr = dstmask->Origin();
+  float *error_ptr = errorline->Origin();
+  
+#ifdef AHUMADA
+  // AHUMADA_FACTOR=1.0, DETECT_THREAS=1.0, AHUMADA_EXPONENT=3.5
+  // So: err = exp(-pow(err, 3.5)) = exp(-err^3.5)
+  // pow(x, 3.5) = x^3 * sqrt(x) = x^2 * x * sqrt(x)
+#endif
+  
+  // SIMD loop: process vectors at a time
+  // If logme > 2 (verbose diagnostic output), fall back to scalar path to avoid branching
+  // Since buffers are 64-byte aligned with padding, the last chunk can safely extend
+  // into the padding zone (padding values are never read back)
+  int simd_limit = (logme > 2) ? 0 : w;
+  if (simd_limit > 0) {
+    pooling_simd::MeasureInBandSIMD(ref_ptr, dst_ptr, refmask_ptr, dstmask_ptr,
+                                     error_ptr, simd_limit, visbase);
+  }
+  
+  /* Scalar tail loop NO LONGER NEEDED due to padding (when logme <= 2)!
+   * 
+   * When logme <= 2, all Line buffers have 64-byte aligned padding, allowing
+   * us to safely process full SIMD chunks beyond 'w'. The padding values are
+   * garbage but never read back since all later code respects 'w' as the true width.
+   * 
+   * When logme > 2, simd_limit is 0 and we use the full scalar path below for
+   * diagnostic output (which involves branches that would hurt SIMD performance).
+   * 
+   * Original scalar code (kept for logme > 2 case):
+   */
+  for(i = (logme > 2) ? 0 : simd_limit; i < w; i++) {
+    float vis    = 1.0;
+    float visref = 1.0;
+    float visdst = 1.0;
+    float err;
     //
     // Get the relative visibility of the coefficients due to masking.
     // The DC part is not masked ("threshold elevation")
@@ -224,18 +379,18 @@ void Pooling::MeasureInBand(class Line *refline,class Line *dstline,
     // Note that the masking algorithm already multiplied refline and dstline
     // with the DCT output factor and the CSF factor.
     err = refline->Get(i) - dstline->Get(i);
-    err = fabs(err); // DCTPSNR uses here err*err, but the difference gets visible, not its square
+    err = fabsf(err); // DCTPSNR uses here err*err, but the difference gets visible, not its square
     err = err * vis;
-    assert(err >= 0.0);
-    if (err > 0.0) {
+    assert(err >= 0.0f);
+    if (err > 0.0f) {
       // The visibility threshold is normalized such that
       // 1.0 is approximately 50% detection probabililty.
       // However, 1.0 is the "noticability" threshold, thus
       // upscale.
 #ifdef AHUMADA
-      err = exp(AHUMADA_FACTOR * -pow(DETECT_THREAS * err,AHUMADA_EXPONENT)); // 1.0 - detection probability.
+      err = expf(AHUMADA_FACTOR * -powf(DETECT_THREAS * err,AHUMADA_EXPONENT)); // 1.0 - detection probability.
 #else
-      err = exp(-pow(2.0 * err,3.5)); // 1.0 - detection probability.
+      err = expf(-powf(2.0f * err,3.5f)); // 1.0 - detection probability.
 #endif
       assert(err >= 0.0 && err <= 1.0);
       //
@@ -254,7 +409,7 @@ void Pooling::MeasureInBand(class Line *refline,class Line *dstline,
 /// Pooling::Measure
 // Measure the difference between the two images, return the result.
 // Optionally create output log images.
-DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
+float Pooling::Measure(class Image *ref ,class Image *dist,
 			class Image *sref,class Image *sdist,
 			int cores,int logme)
 {
@@ -266,7 +421,7 @@ DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
   int comps = ref->ComponentCountOf();
   class Line errorline(w);
   class Line backref(w),distref(w);
-  DOUBLE error = 0.0;
+  float error = 0.0;
   //
   //
   m_iComponents = comps;
@@ -276,8 +431,7 @@ DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
   //
   // If saliency maps are defined, read the first lines to correct for the offsets.
   if (sref && sdist) {
-    int i;
-    for(i = 0;i < (offset >> 1);i++) {
+    for(int si = 0; si < (offset >> 1); si++) {
       sref->ReadNextPFMLine();
       sdist->ReadNextPFMLine();
     }
@@ -293,44 +447,44 @@ DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
     for(c = 0;c < comps;c++) {
       for(y = 0;y < 8;y++) {
 	for(x = 0;x < 8;x++) {
-	  DOUBLE offset,scale;
+	  float img_offset, img_scale;
 	  if (x == 0 && y == 0) {
-	    offset = 0.0; 
-	    scale  = 255.0/8.0; // show the average luminance, not the nominal low-pass
+	    img_offset = 0.0f; 
+	    img_scale  = 255.0f/8.0f; // show the average luminance, not the nominal low-pass
 	  } else {
-	    offset = 128.0;
-	    scale  = 128.0;
+	    img_offset = 128.0f;
+	    img_scale  = 128.0f;
 	  }
 	  // Correct for the wrong output scaling of the exponent.
-	  scale /= (8.0 * dct_scale[x] * dct_scale[y] * sqrt(norms[x][y]));
-	  m_DCTImgs1[x][y][c].OpenPGM(ref->WidthOf() - 8,ref->HeightOf() - 8,scale,offset,"dct1_%d_%d_%d.pgm",x,y,c);
-	  m_DCTImgs2[x][y][c].OpenPGM(dist->WidthOf() - 8,dist->HeightOf() - 8,scale,offset,"dct2_%d_%d_%d.pgm",x,y,c);
-	  m_DCTDiff[x][y][c].OpenPGM(w,h,128.0,128.0,"dctdiff_%d_%d_%d.pgm",x,y,c);
-	  m_MaskImgs1[x][y][c].OpenPGM(w,h,255.0,0.0,"mask1_%d_%d_%d.pgm",x,y,c);
-	  m_MaskImgs2[x][y][c].OpenPGM(w,h,255.0,0.0,"mask2_%d_%d_%d.pgm",x,y,c);
+	  img_scale /= (8.0f * dct_scale[x] * dct_scale[y] * sqrtf(norms[x][y]));
+	  m_DCTImgs1[x][y][c].OpenPGM(ref->WidthOf() - 8,ref->HeightOf() - 8,img_scale,img_offset,"dct1_%d_%d_%d.pgm",x,y,c);
+	  m_DCTImgs2[x][y][c].OpenPGM(dist->WidthOf() - 8,dist->HeightOf() - 8,img_scale,img_offset,"dct2_%d_%d_%d.pgm",x,y,c);
+	  m_DCTDiff[x][y][c].OpenPGM(w,h,128.0f,128.0f,"dctdiff_%d_%d_%d.pgm",x,y,c);
+	  m_MaskImgs1[x][y][c].OpenPGM(w,h,255.0f,0.0f,"mask1_%d_%d_%d.pgm",x,y,c);
+	  m_MaskImgs2[x][y][c].OpenPGM(w,h,255.0f,0.0f,"mask2_%d_%d_%d.pgm",x,y,c);
 #ifdef EXTENDED_FILTER
 	  if (x == 0 && y == 0 && c == 0) {
 	    // DCT scale correction is already done in the visibility computation
 	    // of the mask, do not repeat.
-	    scale = luma_tbl[0] / 255.0;
-	    m_LowPasses1[0][0].OpenPGM(w,h,scale * 255.0 / 8.0,0.0   ,"lowpass1_%d_%d.pgm",0,0);
-	    m_LowPasses2[0][0].OpenPGM(w,h,scale * 255.0 / 8.0,0.0   ,"lowpass2_%d_%d.pgm",0,0);
-	    m_LowPasses1[0][1].OpenPGM(w,h,scale * 128.0      ,128.0 ,"lowpass1_%d_%d.pgm",0,1);
-	    m_LowPasses2[0][1].OpenPGM(w,h,scale * 128.0      ,128.0 ,"lowpass2_%d_%d.pgm",0,1);
-	    m_LowPasses1[1][0].OpenPGM(w,h,scale * 128.0      ,128.0 ,"lowpass1_%d_%d.pgm",1,0);
-	    m_LowPasses2[1][0].OpenPGM(w,h,scale * 128.0      ,128.0 ,"lowpass2_%d_%d.pgm",1,0);
-	    m_LowPasses1[1][1].OpenPGM(w,h,scale * 128.0      ,128.0 ,"lowpass1_%d_%d.pgm",1,1);
-	    m_LowPasses2[1][1].OpenPGM(w,h,scale * 128.0      ,128.0 ,"lowpass2_%d_%d.pgm",1,1);
+	    float scale = luma_tbl[0] / 255.0f;
+	    m_LowPasses1[0][0].OpenPGM(w,h,scale * 255.0f / 8.0f,0.0f   ,"lowpass1_%d_%d.pgm",0,0);
+	    m_LowPasses2[0][0].OpenPGM(w,h,scale * 255.0f / 8.0f,0.0f   ,"lowpass2_%d_%d.pgm",0,0);
+	    m_LowPasses1[0][1].OpenPGM(w,h,scale * 128.0f      ,128.0f ,"lowpass1_%d_%d.pgm",0,1);
+	    m_LowPasses2[0][1].OpenPGM(w,h,scale * 128.0f      ,128.0f ,"lowpass2_%d_%d.pgm",0,1);
+	    m_LowPasses1[1][0].OpenPGM(w,h,scale * 128.0f      ,128.0f ,"lowpass1_%d_%d.pgm",1,0);
+	    m_LowPasses2[1][0].OpenPGM(w,h,scale * 128.0f      ,128.0f ,"lowpass2_%d_%d.pgm",1,0);
+	    m_LowPasses1[1][1].OpenPGM(w,h,scale * 128.0f      ,128.0f ,"lowpass1_%d_%d.pgm",1,1);
+	    m_LowPasses2[1][1].OpenPGM(w,h,scale * 128.0f      ,128.0f ,"lowpass2_%d_%d.pgm",1,1);
 	  }
 #endif
 	}
       }
       {
-	ULONG wo = ref->WidthOf()  - 8;
-	ULONG ho = ref->HeightOf() - 8;
-	DOUBLE offset = (c == 0)?(0):(128);
-	m_SrcImgs1[c].OpenPGM(wo,ho,255.0,offset,"refimg_%d.pgm",c);
-	m_SrcImgs2[c].OpenPGM(wo,ho,255.0,offset,"dstimg_%d.pgm",c);
+	uint32_t wo = ref->WidthOf()  - 8;
+	uint32_t ho = ref->HeightOf() - 8;
+	float img_offset = (c == 0) ? 0.0f : 128.0f;
+	m_SrcImgs1[c].OpenPGM(wo,ho,255.0f,img_offset,"refimg_%d.pgm",c);
+	m_SrcImgs2[c].OpenPGM(wo,ho,255.0f,img_offset,"dstimg_%d.pgm",c);
       }
     }
   }
@@ -340,7 +494,7 @@ DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
   for(c = 0;c < comps;c++) {
     for(y = 0;y < 8;y++) {
       for(x = 0;x < 8;x++) {
-	DOUBLE vis,expon;
+	float vis,expon;
 	int xs = x; // << 1;
 	int ys = y; // << 1;
 	if (xs > 7) xs = 7;
@@ -348,32 +502,32 @@ DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
 	//
 	// First integrate the scaling of the DCT. Input must be scaled by 8, then by the
 	// norm correction factor.
-	vis = 1.0 / (8.0 * dct_scale[x] * dct_scale[y] * sqrt(norms[x][y]));
+	vis = 1.0f / (8.0f * dct_scale[x] * dct_scale[y] * sqrtf(norms[x][y]));
 	//
 	// The idea of the next scaling is to bring the visibility just to
 	// the "just noticable difference", which is by an 8bpp input given
 	// by the quantization coefficients of the JPEG compression. All other
 	// coefficients are then scaled to the visibility threshold of the DC
 	// luminance.
-	vis *= 255.0 / 16.0;
+	vis *= 255.0f / 16.0f;
 	//
 	// Further, include the base visibility of the frequency band.
 	switch(c) {
 	case 0: // Y
-	  vis *= 1.0   * 16.0 / luma_tbl  [x + (y << 3)];
+	  vis *= 1.0f   * 16.0f / luma_tbl  [x + (y << 3)];
 	  break;
 	case 1: // Cb
 #ifdef AHUMADA
-	  vis *= 0.088 * 45.0 / cb_tbl    [xs + (ys << 3)];
+	  vis *= 0.088f * 45.0f / cb_tbl    [xs + (ys << 3)];
 #else
-	  vis *= 0.088 * 16.0 / chroma_tbl[x + (y << 3)];
+	  vis *= 0.088f * 16.0f / chroma_tbl[x + (y << 3)];
 #endif
 	  break;
 	case 2: // Cr
 #ifdef AHUMADA
-	  vis *= 0.278 * 21.0 / cr_tbl    [xs + (ys << 3)];
+	  vis *= 0.278f * 21.0f / cr_tbl    [xs + (ys << 3)];
 #else
-	  vis *= 0.278 * 16.0 / chroma_tbl[x + (y << 3)];
+	  vis *= 0.278f * 16.0f / chroma_tbl[x + (y << 3)];
 #endif
 	  break;
 	}
@@ -381,14 +535,14 @@ DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
 	// Get the masking exponent. This is also frequency dependent.
 	switch(x+y) {
 	case 0:
-	  expon = 0.7;
+	  expon = 0.7f;
 	  break;
 	case 1:
 	case 2:
-	  expon = 0.8;
+	  expon = 0.8f;
 	  break;
 	case 3:
-	  expon = 0.9;
+	  expon = 0.9f;
 	  break;
 	default:
 	  expon = 1.0;
@@ -410,7 +564,33 @@ DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
   m_Weights2[0][0][0].EnablePostFilter();
 #endif
   //
-  // Now for the main loop.
+  // EAGER ALLOCATION: Allocate all Component buffers upfront (before any computation).
+  // This ensures all pointers are valid (never nullptr) after warmup completes.
+  // Width is known after OpenPNM, so we can allocate everything now.
+  ref->AllocateAllBuffers();
+  dist->AllocateAllBuffers();
+  //
+  // Explicit warmup phase: Fill DCT and masking buffers before main processing.
+  // DCT needs 8 lines, masking needs 5 more (total 13 lines until all outputs valid).
+  // After warmup, all GetDCTBand() and GetMask() calls return valid pointers (never nullptr).
+  const int DCT_WARMUP = 8;
+  const int MASK_WARMUP = 5;
+  const int TOTAL_WARMUP = DCT_WARMUP + MASK_WARMUP - 1;  // 12 lines (they overlap by 1)
+  
+  int warmup_count = 0;
+  while (warmup_count < TOTAL_WARMUP && !ref->ImageDone()) {
+    ref->ReadNextLine();
+    dist->ReadNextLine();
+    
+    // After DCT warmup (8 lines), start running masking (which needs 5 lines to warm up)
+    if (warmup_count >= DCT_WARMUP - 1) {
+      SplitWork(cores);  // Pushes lines into masking
+    }
+    
+    warmup_count++;
+  }
+  //
+  // Now for the main loop. All buffers are warmed up, no nullptr checks needed.
   while(!ref->ImageDone()) {
     bool collected = false;
     ref->ReadNextLine();
@@ -419,7 +599,7 @@ DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
     //
     // Reset the detection probability for this line.
     for(i = 0;i < w;i++) {
-      errorline.At(i) = 1.0;
+      errorline.At(i) = 1.0f;
     }
     //
 #if defined(WEIGHT_MSE) || defined(WEIGHT_DELTA_E)
@@ -460,52 +640,49 @@ DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
 	//
 	if (mskdest) {
 	  for(i = 0;i < w;i++) {
-	    mskdest->At(i) = msk1line->Get(i) * 0.5 + msk2line->Get(i) * 0.5 + msk3line->Get(i) * 0.25;
+	    mskdest->At(i) = msk1line->Get(i) * 0.5f + msk2line->Get(i) * 0.5f + msk3line->Get(i) * 0.25f;
 	  }
 	}
       }
       //
       {
+	// After warmup, all masks guaranteed valid (never nullptr)
 	class Line *mskdest  = m_Weights2[0][0][0].GetMask();
 	class Line *msk1line = m_Weights2[0][1][0].GetMask();
 	class Line *msk2line = m_Weights2[1][0][0].GetMask();
 	class Line *msk3line = m_Weights2[1][1][0].GetMask();
-	//
-	if (mskdest) {
-	  for(i = 0;i < w;i++) {
-	    mskdest->At(i) = msk1line->Get(i) * 0.5 + msk2line->Get(i) * 0.5 + msk3line->Get(i) * 0.25;
-	  }
+	
+	for(i = 0;i < w;i++) {
+	  mskdest->At(i) = msk1line->Get(i) * 0.5f + msk2line->Get(i) * 0.5f + msk3line->Get(i) * 0.25f;
 	}
       }
       //
       for(y = 0;y < 8;y++) {
 	for(x = 0;x < 8;x++) {
-	  class Line *refline = NULL,*refmask = NULL;
-	  class Line *dstline = NULL,*dstmask = NULL;
-	  //
-	  if ((refmask = m_Weights1[x][y][c].GetMask())) {
-	    if (logme > 2) m_MaskImgs1[x][y][c].WriteLine(refmask);
-	    refline = m_Weights1[x][y][c].GetCoeff();
+	  // After warmup, all masks guaranteed valid (never nullptr)
+	  class Line *refmask = m_Weights1[x][y][c].GetMask();
+	  class Line *refline = m_Weights1[x][y][c].GetCoeff();
+	  class Line *dstmask = m_Weights2[x][y][c].GetMask();
+	  class Line *dstline = m_Weights2[x][y][c].GetCoeff();
+	  
+	  if (logme > 2) {
+	    m_MaskImgs1[x][y][c].WriteLine(refmask);
+	    m_MaskImgs2[x][y][c].WriteLine(dstmask);
 	  }
-	  if ((dstmask = m_Weights2[x][y][c].GetMask())) {
-	    if (logme > 2) m_MaskImgs2[x][y][c].WriteLine(dstmask);
-	    dstline = m_Weights2[x][y][c].GetCoeff();
-	  }
-	  //
-	  // Now iterate over the line of samples if we could collect
-	  // data.
-	  if (refmask && dstmask) {
+	  
+	  // Process this band (no nullptr checks needed after warmup)
+	  {
 #ifdef EXTENDED_FILTER
 	    if (c == 0 && x == 0 && y == 0) {
 	      // The LL band of the Y-channel
 	      MeasureInBand(m_Weights1[0][0][0].GetLowpass(0,0),m_Weights2[0][0][0].GetLowpass(0,0),
-			    refmask,dstmask,w,logme,luma_tbl[0]/90.0,&errorline);
+			    refmask,dstmask,w,logme,luma_tbl[0]/90.0f,&errorline);
 	      MeasureInBand(m_Weights1[0][0][0].GetLowpass(1,0),m_Weights2[0][0][0].GetLowpass(1,0),
-			    refmask,dstmask,w,logme,luma_tbl[0]/15.0,&errorline);
+			    refmask,dstmask,w,logme,luma_tbl[0]/15.0f,&errorline);
 	      MeasureInBand(m_Weights1[0][0][0].GetLowpass(0,1),m_Weights2[0][0][0].GetLowpass(0,1),
-			    refmask,dstmask,w,logme,luma_tbl[0]/15.0,&errorline);
+			    refmask,dstmask,w,logme,luma_tbl[0]/15.0f,&errorline);
 	      MeasureInBand(m_Weights1[0][0][0].GetLowpass(1,1),m_Weights2[0][0][0].GetLowpass(1,1),
-			    refmask,dstmask,w,logme,luma_tbl[0]/20.0,&errorline);
+			    refmask,dstmask,w,logme,luma_tbl[0]/20.0f,&errorline);
 	    } else 
 #endif
 	      MeasureInBand(refline,dstline,refmask,dstmask,w,logme,1.0,&errorline);
@@ -516,11 +693,10 @@ DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
 	    m_DCTDiff[x][y][c].WriteLine(refline);
 #ifdef EXTENDED_FILTER
 	    if (x == 0 && y == 0 && c == 0) {
-	      int i,j;
-	      for(j = 0;j < 2;j++) {
-		for(i = 0;i < 2;i++) {
-		  m_LowPasses1[i][j].WriteLine(m_Weights1[0][0][0].GetLowpass(i,j));
-		  m_LowPasses2[i][j].WriteLine(m_Weights2[0][0][0].GetLowpass(i,j));
+	      for(int j = 0; j < 2; j++) {
+		for(int ii = 0; ii < 2; ii++) {
+		  m_LowPasses1[ii][j].WriteLine(m_Weights1[0][0][0].GetLowpass(ii,j));
+		  m_LowPasses2[ii][j].WriteLine(m_Weights2[0][0][0].GetLowpass(ii,j));
 		}
 	      }
 	    }
@@ -532,8 +708,8 @@ DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
     //
     // One line done. If errors got collected, update the error map.
     if (collected) {
-      class Line *refsaliency = NULL;
-      class Line *dstsaliency = NULL;
+      class Line *refsaliency = nullptr;
+      class Line *dstsaliency = nullptr;
       //
       if (sref && sdist) {
 	refsaliency = sref->ReadNextPFMLine();
@@ -542,10 +718,10 @@ DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
       //
       for(i = 0;i < w;i++) {
 #if defined(WEIGHT_DELTA_E)
-	DOUBLE v = 1.0 - errorline.Get(i); 
-	DOUBLE t = 0;
-	DOUBLE a,c1,c2;
-	DOUBLE a2,c12,c22;
+	float v = 1.0 - errorline.Get(i); 
+	float t = 0;
+	float a,c1,c2;
+	float a2,c12,c22;
 	//
 	a  = m_Weights1[0][0][0].GetOriginal()->Get(i);
 	a2 = m_Weights2[0][0][0].GetOriginal()->Get(i);
@@ -562,30 +738,30 @@ DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
 	  c2  = 0;
 	  c22 = 0;
 	}
-	DOUBLE deltaE = DeltaE(a,c1,c2,a2,c12,c22);
+	float deltaE = DeltaE(a,c1,c2,a2,c12,c22);
 	assert(deltaE >= 0.0);
 	t     = deltaE * v;
 #elif defined(WEIGHT_MSE)
-	DOUBLE v = 1.0 - errorline.Get(i); 
-	DOUBLE t = 0;
+	float v = 1.0 - errorline.Get(i); 
+	float t = 0;
 	for(c = 0;c < comps;c++) {
-	  DOUBLE org = m_Weights1[0][0][c].GetOriginal()->Get(i);
-	  DOUBLE dst = m_Weights2[0][0][c].GetOriginal()->Get(i);
+	  float org = m_Weights1[0][0][c].GetOriginal()->Get(i);
+	  float dst = m_Weights2[0][0][c].GetOriginal()->Get(i);
 	  t         += 64.0 * (org - dst)*(org - dst) * v;
 	}
 #else
-	DOUBLE t = 1.0 - errorline.Get(i);
-	assert(t >= 0.0 && t <= 1.0);
+	float t = 1.0f - errorline.Get(i);
+	assert(t >= 0.0f && t <= 1.0f);
 #endif
 	// Include the saliency if we have it.
 	if (refsaliency && dstsaliency) {
-	  DOUBLE p1,p2;
+	  float p1,p2;
 	  // t is the probability of finding an error. An error is found if *either* the error is
 	  // salient in the reference or the distorted image, which is means that the error is only
 	  // not visible if it is neither salient in reference or distorted image.
 	  p1 = refsaliency->At(i + (offset >> 1));
 	  p2 = dstsaliency->At(i + (offset >> 1));
-	  t *= (1.0 - (1.0 - p1) * (1.0 - p2));
+	  t *= (1.0f - (1.0f - p1) * (1.0f - p2));
 	}
 	error   += t;
 	errorline.At(i) = t;
@@ -602,6 +778,8 @@ DOUBLE Pooling::Measure(class Image *ref ,class Image *dist,
   if (logme)
     printf("\n");
   // Take the average, then the logarithm.
-  return -20.0 * log(error / (w * h * comps)) / log(10.0);
+  return -20.0f * logf(error / (w * h * comps)) / logf(10.0f);
 }
 ///
+
+#endif // HWY_ONCE

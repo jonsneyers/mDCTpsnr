@@ -26,7 +26,7 @@
 #define MEASURE_POOLING_HPP
 
 /// Includes
-#include "global/types.hpp"
+#include <cstdint>
 #include "img/imgwriter.hpp"
 #include "measure/masking.hpp"
 #include "global/thread.hpp"
@@ -68,7 +68,7 @@ class Pooling : private Thread {
   // and adjust the error map.
   void MeasureInBand(class Line *refline,class Line *dstlinst,
 		     const class Line *refmask,const class Line *dstmask,
-		     int w,int logme,DOUBLE visbase,
+		     int w,int logme,float visbase,
 		     class Line *errorline);
   //
 public:
@@ -76,9 +76,9 @@ public:
   ~Pooling(void);
   //
   // Measure the difference between the two images, return the result.
-  // The saliency images are probability maps and optional (may be NULL)
+  // The saliency images are probability maps and optional (may be nullptr)
   // Optionally create output log images.
-  DOUBLE Measure(class Image *ref ,class Image *dist,
+  float Measure(class Image *ref ,class Image *dist,
 		 class Image *sref,class Image *dref,
 		 int cores,int loglevel);
   //

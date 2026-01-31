@@ -31,8 +31,8 @@
 #define IO_BYTESTREAM_HPP
 
 /// Includes
-#include "std/assert.hpp"
-#include "global/types.hpp"
+#include <cassert>
+#include <cstdint>
 ///
 
 /// abstract ByteStream class
@@ -44,19 +44,19 @@
 // read or write complete buffers.
 class ByteStream {
 protected:
-  ULONG       m_ulBufSize;   // Size of our (internal) IO buffer
-  ULONG       m_ulBufBytes;  // # of valid(r)/available(w) bytes (0..bufsize-1)
-  UBYTE      *m_pucBuffer;   // an IO buffer if we have it
-  UBYTE      *m_pucBufPtr;   // a pointer to the first valid buffer byte
-  ULONG       m_ulCounter;   // counts output bytes, if possible
+  uint32_t       m_ulBufSize;   // Size of our (internal) IO buffer
+  uint32_t       m_ulBufBytes;  // # of valid(r)/available(w) bytes (0..bufsize-1)
+  uint8_t      *m_pucBuffer;   // an IO buffer if we have it
+  uint8_t      *m_pucBufPtr;   // a pointer to the first valid buffer byte
+  uint32_t       m_ulCounter;   // counts output bytes, if possible
   //
   // Note: The counter and the buffers must be maintained by instances of
   // this abstract class.
   //
   // constructors: This just fills in the buffer size and resets the pointers
   //
-  ByteStream(ULONG bufsize = 2048)
-    : m_ulBufSize(bufsize), m_ulBufBytes(0), m_pucBuffer(NULL), m_ulCounter(0)
+  ByteStream(uint32_t bufsize = 2048)
+    : m_ulBufSize(bufsize), m_ulBufBytes(0), m_pucBuffer(nullptr), m_ulCounter(0)
   { };
   //
   //
@@ -64,7 +64,7 @@ protected:
   // fill up the buffer and flush it.
   // these two have to be replaced by the corresponding
   // member functions of the inherited classses
-  virtual LONG Fill(void) = 0;
+  virtual int32_t Fill(void) = 0;
   //
 public: 
   // Seek modes for extended streams (though not this stream)
@@ -75,7 +75,7 @@ public:
   };
   //
   // The EOF indicator for get.
-  static const LONG Eof = -1;
+  static const int32_t Eof = -1;
   //
   // the destructor is virtual and has to be
   // overloaded.
@@ -85,8 +85,8 @@ public:
   // Some rather standard IO functions, you know what they do.
   // These are not for overloading and non-virtual. All they
   // need is the buffer structure above. 
-  LONG Read(UBYTE *buffer,ULONG size);          // read from buffer
-  LONG Write(const UBYTE *buffer,ULONG size);   // write to buffer
+  int32_t Read(uint8_t *buffer,uint32_t size);          // read from buffer
+  int32_t Write(const uint8_t *buffer,uint32_t size);   // write to buffer
   //
   // Reset the byte counter. This *MUST* be matched by a flush or a refill
   // or otherwise the result is undesirable.
@@ -100,29 +100,29 @@ public:
   //
   // The following two methods are single byte IO functions,
   // inlined for maximal performance.
-  LONG Get(void)                          // read a single byte (inlined)
+  int32_t Get(void)                          // read a single byte (inlined)
   {
     if (m_ulBufBytes == 0) {
       if (Fill() == 0)                    // Found EOF
 	return Eof;
     }
-    assert(LONG(m_ulBufBytes) > 0);
+    assert(int32_t(m_ulBufBytes) > 0);
     m_ulBufBytes--;
     return *m_pucBufPtr++;
   }
   //
   // Just the same for writing data.
-  void Put(UBYTE byte)           // write a single byte (inlined)
+  void Put(uint8_t byte)           // write a single byte (inlined)
   {
     if (m_ulBufBytes == 0) {
       Flush();                   // note that this will also allocate a buffer
     }
-    assert(LONG(m_ulBufBytes) > 0);
+    assert(int32_t(m_ulBufBytes) > 0);
     m_ulBufBytes--;
     *m_pucBufPtr++ = byte;
   }
   //
-  UBYTE LastByte(void)
+  uint8_t LastByte(void)
   {
     if (m_pucBufPtr>m_pucBuffer) {
       return m_pucBufPtr[-1];
@@ -132,7 +132,7 @@ public:
   }
   //
   // Return the last byte written/read and un-put/get it.
-  UBYTE LastUnDo(void)
+  uint8_t LastUnDo(void)
   {
     if (m_pucBufPtr>m_pucBuffer) {
       m_ulBufBytes++;
@@ -144,7 +144,7 @@ public:
   }
   //
   // Return the byte counter = #of bytes read or written
-  ULONG FilePosition(void) 
+  uint32_t FilePosition(void) 
   {
     if (m_pucBuffer) {
       return m_ulCounter + m_pucBufPtr - m_pucBuffer;

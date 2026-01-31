@@ -34,9 +34,9 @@
 #include "dct/line.hpp"
 #include "ctrafo/colortransformer.hpp"
 #include "global/exceptions.hpp"
-#include "std/stdio.hpp"
-#include "std/stdlib.hpp"
-#include "std/math.hpp"
+#include <cstdio>
+#include <cstdlib>
+#include <cmath>
 #include "io/bytestream.hpp"
 ///
 
@@ -59,7 +59,7 @@ static int logint2(unsigned int v)
 /// Image::Image
 // Create a new image
 Image::Image(void)
-  : m_usComponents(0), m_ppDCTArray(NULL), m_ppLineArray(NULL), m_pIn(NULL)
+  : m_usComponents(0), m_ppDCTArray(nullptr), m_ppLineArray(nullptr), m_pIn(nullptr)
 {
   m_dScaling = 1.0;
 }
@@ -69,14 +69,14 @@ Image::Image(void)
 Image::~Image(void)
 {
   if (m_ppDCTArray) { 
-    UWORD i;
+    uint16_t i;
     for(i=0;i<m_usComponents;i++) {
       delete m_ppDCTArray[i];
     }
     delete[] m_ppDCTArray;
   }
   if (m_ppLineArray) {
-    UWORD i;
+    uint16_t i;
     for(i=0;i<m_usComponents;i++) {
       delete m_ppLineArray[i];
     }
@@ -88,12 +88,12 @@ Image::~Image(void)
 /// Image::ReadNumber
 // Read an ascii string from the input file,
 // encoding a number. This number gets returned. Throws on error.
-LONG Image::ReadNumber(class ByteStream *from)
+int32_t Image::ReadNumber(class ByteStream *from)
 {
-  LONG number   = 0;     // integer number (so far)
+  int32_t number   = 0;     // integer number (so far)
   bool negative = false; // sign of the number (true if negative);
   bool valid    = false; // gets true as soon as we get at least one valid digit.
-  LONG in;
+  int32_t in;
 
   //
   // Skip any leading blanks
@@ -141,13 +141,13 @@ LONG Image::ReadNumber(class ByteStream *from)
 ///
 
 /// Image::ReadFloat
-DOUBLE Image::ReadFloat(class ByteStream *from)
+float Image::ReadFloat(class ByteStream *from)
 {  
   char buffer[256];
   char *end = buffer+255;
   char *bp  = buffer;
-  LONG in;
-  DOUBLE res;
+  int32_t in;
+  float res;
   //
   // Skip any leading blanks
   SkipBlanks(from);
@@ -168,7 +168,7 @@ DOUBLE Image::ReadFloat(class ByteStream *from)
   from->LastUnDo();
   
   *bp = 0;
-  res = strtod(buffer,&bp);
+  res = static_cast<float>(strtod(buffer,&bp));
   if (*bp != 0)
     Throw(InvalidParameter,"Image::ReadFloat","floating point number is not well formed");
 
@@ -178,7 +178,7 @@ DOUBLE Image::ReadFloat(class ByteStream *from)
 
 /// Image::WriteNumber
 // Write an Ascii string to a bytestream.
-void Image::WriteNumber(class ByteStream *to,LONG number)
+void Image::WriteNumber(class ByteStream *to,int32_t number)
 {
   char buf[11]; // we need at most 11 digits to represent it.
   char *out = buf;
@@ -196,7 +196,7 @@ void Image::WriteNumber(class ByteStream *to,LONG number)
 // Skip blank spaces in the bytestream.
 void Image::SkipBlanks(class ByteStream *from)
 {
-  LONG ch;
+  int32_t ch;
 
   do {
     ch = from->Get();
@@ -211,7 +211,7 @@ void Image::SkipBlanks(class ByteStream *from)
 // Skip comment lines starting with #
 void Image::SkipComment(class ByteStream *in)
 {
-  LONG c;
+  int32_t c;
   //
   //
   do {
@@ -241,13 +241,13 @@ void Image::SkipComment(class ByteStream *in)
 // Throw in case the file should be invalid.
 void Image::OpenPNM(class ByteStream *input,int cores)
 {
-  LONG data;
-  UWORD i;
-  LONG precision;
-  ULONG width,height;
-  UBYTE bits;
+  int32_t data;
+  uint16_t i;
+  int32_t precision;
+  uint32_t width,height;
+  uint8_t bits;
   //
-  assert(m_ppDCTArray == NULL && m_pIn == NULL);
+  assert(m_ppDCTArray == nullptr && m_pIn == nullptr);
   //
   // Read the header of the file. This must be P6 for a
   // color image, and P5 for a grey-scale image. We currently
@@ -268,12 +268,12 @@ void Image::OpenPNM(class ByteStream *input,int cores)
   // Initialize the component array now.
   m_ppDCTArray = new class Component*[m_usComponents];
   for(i = 0;i<m_usComponents;i++)
-    m_ppDCTArray[i] = NULL;
+    m_ppDCTArray[i] = nullptr;
   //
   // Initialize the line array.
   m_ppLineArray      = new class Line*[m_usComponents];
   for(i = 0;i<m_usComponents;i++)
-    m_ppLineArray[i]      = NULL;
+    m_ppLineArray[i]      = nullptr;
   //
   SkipComment(input);
   // Read the width and the height off the stream. This will also
@@ -326,12 +326,12 @@ void Image::OpenPNM(class ByteStream *input,int cores)
 // Load an image from an already open (binary) PFM image
 void Image::OpenPFM(class ByteStream *input)
 {
-  LONG data;
-  UWORD i;
-  DOUBLE scaling;
-  ULONG width,height;
+  int32_t data;
+  uint16_t i;
+  float scaling;
+  uint32_t width,height;
   //
-  assert(m_ppDCTArray == NULL && m_pIn == NULL);
+  assert(m_ppDCTArray == nullptr && m_pIn == nullptr);
   //
   // Read the header of the file. This must be P6 for a
   // color image, and P5 for a grey-scale image. We currently
@@ -350,7 +350,7 @@ void Image::OpenPFM(class ByteStream *input)
   // Initialize the line array.
   m_ppLineArray      = new class Line*[m_usComponents];
   for(i = 0;i<m_usComponents;i++)
-    m_ppLineArray[i]      = NULL;
+    m_ppLineArray[i]      = nullptr;
   //
   SkipComment(input);
   // Read the width and the height off the stream. This will also
@@ -365,7 +365,7 @@ void Image::OpenPFM(class ByteStream *input)
   if (width <= 0 || height <= 0)
     Throw(OutOfRange,"Image::LoadPFM","image dimensions are out of range");
   //
-  if (scaling <= 0.0)
+  if (scaling <= 0.0f)
     Throw(OutOfRange,"Image::LoadPFM","image scaling is out of range");
   //
   // Skip a single whitespace character.
@@ -396,6 +396,21 @@ void Image::OpenPFM(class ByteStream *input)
 }
 ///
 
+/// Image::AllocateAllBuffers
+// Eagerly allocate all Component DCT buffers before processing starts.
+// This ensures all pointers are valid (never nullptr) after warmup.
+// Called after OpenPNM, before warmup loop.
+void Image::AllocateAllBuffers(void)
+{
+  assert(m_ppDCTArray);
+  assert(m_ulWidth > 0);
+  
+  // Allocate buffers for all components
+  for (int i = 0; i < m_usComponents; i++) {
+    m_ppDCTArray[i]->AllocateBuffers(m_ulWidth);
+  }
+}
+///
 
 /// Image::ReadNextLine
 // Read the next line from a PNM image.
@@ -406,10 +421,10 @@ void Image::ReadNextLine(void)
   //
   // Now read the data, component wise interleaved.
   if (m_ulY < m_ulHeight) {
-    ULONG x;
+    uint32_t x;
     int i;
-    LONG data;
-    LONG precision = (1UL << m_ucBits) - 1;
+    int32_t data;
+    int32_t precision = (1UL << m_ucBits) - 1;
     //
     for(x = 0; x < m_ulWidth;x++) {
       for(i=0;i<m_usComponents;i++) {
@@ -419,7 +434,7 @@ void Image::ReadNextLine(void)
 	  Throw(Eof,"Image::LoadPNM","unexpected EOF detected in input image");
 	//
 	if (m_ucBits > 8) {
-	  LONG dt = m_pIn->Get();
+	  int32_t dt = m_pIn->Get();
 	  if (dt == ByteStream::Eof)
 	    Throw(Eof,"Image::LoadPNM","unexpected EOF detected in input image");
 	  data = (data << 8) | dt;
@@ -428,11 +443,9 @@ void Image::ReadNextLine(void)
 	if (data < 0 || data > precision)
 	  Throw(OutOfRange,"Image::LoadPNM","the input image contains invalid pixels");
 	//
-#ifdef INPUT_GAMMA
-	m_ppLineArray[i]->At(x)    = pow(DOUBLE(data) / precision,INPUT_GAMMA);
-#else
-	m_ppLineArray[i]->At(x)    = DOUBLE(data) / precision;
-#endif
+	// Store as integer value (will be converted via lookup table in color transform)
+	// This avoids normalization and allows direct lookup table indexing
+	m_ppLineArray[i]->At(x) = float(data);
       }
     }
     //
@@ -457,20 +470,20 @@ void Image::ReadNextLine(void)
 class Line *Image::ReadNextPFMLine(void)
 { 
   assert(m_pIn);
-  assert(m_ppDCTArray == NULL);
+  assert(m_ppDCTArray == nullptr);
   assert(m_usComponents == 1);
-  assert(sizeof(FLOAT) == sizeof(ULONG));
+  assert(sizeof(float) == sizeof(uint32_t));
 
   if (m_ulY < m_ulHeight) {
     class Line *line = m_ppLineArray[0];
     assert(line);
-    for(ULONG x = 0; x < m_ulWidth;x++) {
+    for(uint32_t x = 0; x < m_ulWidth;x++) {
       union {
-	FLOAT f_data;
-	ULONG i_data;
+	float f_data;
+	uint32_t i_data;
       } u;
-      DOUBLE v;
-      LONG in1,in2,in3,in4;
+      float v;
+      int32_t in1,in2,in3,in4;
       // Note that data is safed in little endianness. Yuck!
       in1 = m_pIn->Get();
       in2 = m_pIn->Get();
@@ -482,29 +495,29 @@ class Line *Image::ReadNextPFMLine(void)
       //
       u.i_data = (in4 << 24) | (in3 << 16) | (in2 << 8) | (in1 << 0);
       v        = u.f_data * m_dScaling;
-      if (v < 0.0)
-	v = 0.0;
-      if (v > 1.0)
-	v = 1.0;
+      if (v < 0.0f)
+	v = 0.0f;
+      if (v > 1.0f)
+	v = 1.0f;
       line->At(x) = v;
     }
     m_ulY++;
     return line;
   }
-  return NULL;
+  return nullptr;
 }
 ///
 
 
 /// Image::FindScale
-DOUBLE Image::FindScale(void)
+float Image::FindScale(void)
 {
-  DOUBLE max = 0.0;
+  float max = 0.0;
 
   while (m_ulY < m_ulHeight) {
     class Line *line = ReadNextPFMLine();
-    for(ULONG i = 0;i < line->LengthOf();i++) {
-      DOUBLE v = line->At(i);
+    for(uint32_t i = 0;i < line->LengthOf();i++) {
+      float v = line->At(i);
       if (v > max)
 	max = v;
     }

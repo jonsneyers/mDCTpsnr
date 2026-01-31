@@ -31,7 +31,7 @@
 #define MEASURE_MASKING_HPP
 
 /// Includes
-#include "global/types.hpp"
+#include <cstdint>
 ///
 
 /// Forwards
@@ -50,54 +50,57 @@ public:
   //
 private:
   //
-  // Line buffer for the lines containing the masking strength.
+  // Line buffers (wrapper objects with minimal overhead)
   class Line    *m_pMask;
-  //
-  // The output line: Shifted input, to be masked by the mask.
   class Line    *m_pOutput;
-  //
-  // The output line: Shifted input, unmasked.
   class Line    *m_pOriginal;
-  //
-  // Input buffer for the unmasked lines.
   class Line    *m_pInput[MaskSize];
-  //
-  // Input buffer for the original lines.
   class Line    *m_pBuffer[MaskSize];
-  //
-  // The scaled/nonlinear input lines.
   class Line    *m_pMapped;
-  //
-  // The line sum, multiplied with the window in X direction.
   class Line    *m_pAdded[MaskSize];
-  //
-  // The four bands of the low-pass filter output (LL,HL,LH and HH)
   class Line    *m_pFiltered[2][2];
   //
-  // The window function for computing the mask.
-  DOUBLE         m_Window[MaskSize][MaskSize];
+  // Contiguous buffers for all data (no individual allocations)
+  float        *m_pWideBuffer;    // For width+MaskSize lines
+  float        *m_pNormalBuffer;  // For width lines
+  uint32_t          m_ulWideStride;   // Stride for wide lines
+  uint32_t          m_ulNormalStride; // Stride for normal lines
+  uint32_t          m_ulWideWidth;    // Cached wide width (width + MaskSize)
   //
-  // The one-dimensional window function.
-  DOUBLE         m_Mask[MaskSize];
+  // The one-dimensional window function (for masking)
+  float         m_Mask[MaskSize];
   //
   // Current Y position.
-  ULONG          m_ulY;
+  uint32_t          m_ulY;
   //
   // The masking exponent
-  DOUBLE         m_dMaskingSlope;
+  float         m_dMaskingSlope;
   //
   // The visibility of this band. Input is multiplied with this factor.
-  DOUBLE         m_dVisibility;
+  float         m_dVisibility;
   //
   // Set in case another filter should be installed on the output.
   bool           m_bPostFilter;
   //
   // Filter coefficients for the post filter.
-  DOUBLE         m_LowFilter[MaskSize];
-  DOUBLE         m_HiFilter[MaskSize];
+  float         m_LowFilter[MaskSize];
+  float         m_HiFilter[MaskSize];
   //
   // Normalization constants for the low and high-passes
-  DOUBLE         m_NormLo,m_NormHi;
+  float         m_NormLo,m_NormHi;
+  //
+  // Width of buffers (0 = not initialized yet)
+  uint32_t          m_ulWidth;
+  //
+  // Cached filter coefficient products (precomputed for ComputeLowpass)
+  float         m_FilterCoeffs_LL[MaskSize][MaskSize];
+  float         m_FilterCoeffs_LH[MaskSize][MaskSize];
+  float         m_FilterCoeffs_HL[MaskSize][MaskSize];
+  float         m_FilterCoeffs_HH[MaskSize][MaskSize];
+  bool           m_bCoeffsComputed;
+  //
+  // Initialize all buffers to the given width (called on first PushLine)
+  void InitializeBuffers(uint32_t width) __attribute__((noinline));
   //
   // Compute the masking strength for the buffered lines, create a new buffered
   // output line.
@@ -112,13 +115,13 @@ public:
   ~Masking(void);
   //
   // Define the masking exponent for this band
-  void SetMaskingExponent(DOUBLE expon)
+  void SetMaskingExponent(float expon)
   {
     m_dMaskingSlope = expon;
   }
   //
   // Define the visibility of this band.
-  void SetVisibility(DOUBLE vis)
+  void SetVisibility(float vis)
   {
     m_dVisibility  = vis;
   }
@@ -133,7 +136,7 @@ public:
   // available on time together with the masked output.
   void PushOriginal(class Line *line);
   //
-  // Return the current line describing the masking strenght, or NULL if this is not
+  // Return the current line describing the masking strenght, or nullptr if this is not
   // yet computed.
   class Line *GetMask(void) const
   {
@@ -148,10 +151,10 @@ public:
   }
   //
   // Return the original input line, offset'ed correctly to represent the same line
-  // as the masked line.
+  // Returns nullptr - original line not needed in default mode
   class Line *GetOriginal(void) const
   {
-    return m_pOriginal;
+    return nullptr;
   }
   //
   // Return the low-pass bands.

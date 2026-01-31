@@ -24,14 +24,14 @@
 
 /// Includes
 #include "thread.hpp"
-#include "std/stdarg.hpp"
-#include "std/assert.hpp"
-#include "std/string.hpp"
+#include <cstdarg>
+#include <cassert>
+#include <cstring>
 ///
 
 /// Thread::Thread
 Thread::Thread(void)
-  : m_pThreads(NULL)
+  : m_pThreads(nullptr)
 { }
 ///
 
@@ -44,7 +44,7 @@ Thread::~Thread(void)
     if (m_pThreads[i].m_bRunning) {
       m_pThreads[i].m_bDie = true;
       sem_post(&m_pThreads[i].m_MayRun);
-      pthread_join(m_pThreads[i].m_Thread,NULL);
+      pthread_join(m_pThreads[i].m_Thread,nullptr);
     }
   }
   delete[] m_pThreads;
@@ -79,7 +79,7 @@ void Thread::SplitWork(int cores)
 {
   int i;
 
-  if (m_pThreads == NULL) {
+  if (m_pThreads == nullptr) {
     m_pThreads = new struct ThreadStarter[cores];
     m_iTotal   = cores;
     for(i = 0;i < cores;i++) {
@@ -92,7 +92,7 @@ void Thread::SplitWork(int cores)
       sem_init(&m_pThreads[i].m_Done  ,0,0);
       if (i != 0) {
 	// The first thread is run on this core.
-	if (pthread_create(&m_pThreads[i].m_Thread,NULL,&Thread::EntryPoint,&m_pThreads[i]) == 0) {
+	if (pthread_create(&m_pThreads[i].m_Thread,nullptr,&Thread::EntryPoint,&m_pThreads[i]) == 0) {
 	  m_pThreads[i].m_bRunning = true;
 	}
       }

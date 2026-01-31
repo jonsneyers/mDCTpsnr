@@ -31,7 +31,7 @@
 #define GLOBAL_EXCEPTION_HPP
 
 /// Includes
-#include "std/string.hpp"
+#include <cstring>
 ///
 
 /// Class ExceptionPrinter
@@ -90,7 +90,7 @@ public:
   CodecException(char *,ExType why,const char *who,const char *source,
 		 int where,const char *when)
     : file(source), object(who), reason(when),
-      line(where), type(why), ioerr(NULL), buffer(NULL)
+      line(where), type(why), ioerr(nullptr), buffer(nullptr)
   { }  
   // The same, but without a constant source we need to copy
   CodecException(char *,ExType why,const char *who,const char *source,
@@ -98,8 +98,8 @@ public:
   //
   // Generate an exception by an io error
   CodecException(int,const char *io,const char *who,const char *when)
-    : file(NULL), object(who), reason(when), 
-      line(0), type(Ex_IoErr), ioerr(io), buffer(NULL)
+    : file(nullptr), object(who), reason(when), 
+      line(0), type(Ex_IoErr), ioerr(io), buffer(nullptr)
   { }
   // The same, but with non-constant reason argument that must be copied.
   CodecException(int,const char *io,const char *who,char *when);
@@ -125,7 +125,7 @@ public:
 ///
 
 /// Exception macros
-#define Throw(why,object,txt) throw(CodecException(NULL,CodecException::Ex_ ## why,object,__FILE__,__LINE__,txt))
+#define Throw(why,object,txt) throw(CodecException(nullptr,CodecException::Ex_ ## why,object,__FILE__,__LINE__,txt))
 #define ThrowIo(object,desc)  throw(CodecException(0,strerror(errno),object,desc))
 ///
 

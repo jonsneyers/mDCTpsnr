@@ -31,9 +31,9 @@
 #define DCT_COMPONENT_HPP
 
 /// Includes
-#include "global/types.hpp"
+#include <cstdint>
 #include "global/thread.hpp"
-#include "std/assert.hpp"
+#include <cassert>
 ///
 
 /// Forwards
@@ -51,11 +51,15 @@ class Component : private Thread {
   // Output lines. Each frequency band gets one.
   class Line          *m_pOutputLines[8][8];
   //
+  // Contiguous buffer for all 64 output lines (better cache locality)
+  float              *m_pOutputBuffer;
+  uint32_t                m_ulOutputStride;  // Stride between lines (aligned)
+  //
   // Current Y position that is to be pushed in here.
-  ULONG                m_ulY;
+  uint32_t                m_ulY;
   //
   // The window function.
-  DOUBLE               m_Window[8][8];
+  float               m_Window[8][8];
   //
   // The number of cores to use. 1 by default.
   int                  m_iCores;
@@ -74,12 +78,19 @@ public:
   Component(void);
   ~Component(void);
   //
+  // Eagerly allocate all buffers once width is known (before any processing).
+  // After this, all pointers are valid (never nullptr). Called before warmup loop.
+  void AllocateBuffers(uint32_t width);
+  //
   // Push a new line into the DCT conversion. Note that this is an overcomplete
   // representation, i.e. each line triggers a new DCT transformation.
+  // PRECONDITION: AllocateBuffers() must be called first.
   void PushLine(Line &line);
   //
-  // Get the current line indicating the given DCT band. Returns NULL in case this
-  // line is not yet available.
+  // Get the current line indicating the given DCT band.
+  // Returns nullptr only during warmup phase (first 7 image lines).
+  // After warmup (line 8+), always returns valid Line* (never nullptr).
+  // PRECONDITION: AllocateBuffers() must be called before any PushLine().
   class Line *GetDCTBand(int h,int v) const
   {
     assert(h >= 0 && h < 8 && v >= 0 && v < 8);

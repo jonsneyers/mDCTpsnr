@@ -31,8 +31,8 @@
 #define CTRAFO_COLORTRANSFORMER_HPP
 
 /// Includes
-#include "std/math.hpp"
-#include "global/types.hpp"
+#include <cmath>
+#include <cstdint>
 ///
 
 /// Forwards
@@ -44,41 +44,24 @@ class Line;
 // for RGB->YC_bC_r transformation.
 class ColorTransformer {
   //
-  // The lookup table used for the transfer function lookup.
-  DOUBLE *m_pdLookup;
+  // The lookup table for sRGB linearization (uint to float linear)
+  float *m_pdSRGBLinear;
   //
   // The lookup table for the LMS transfer function.
-  DOUBLE *m_pdLMS;
-  //
-  // The RGB->R'B'G' transfer function
-  static DOUBLE sRGBTransfer(DOUBLE in,DOUBLE scale)
-  {
-    if (in < 0.04045 * scale) {
-      // The linear region
-      return in / (12.92 * scale);
-    } else {
-      return pow((in / scale + 0.055) / 1.055,2.4);
-    }
-  }
-  //
-  // The LMS to L'M'S' lookup function.
-  static DOUBLE LMSTransfer(DOUBLE in)
-  {
-    return pow(in,0.43);
-  }
-  //
-  // Create the lookup table.
-  void CreateLookup(ULONG scale);
+  float *m_pdLMS;
   //
   // Create the LMS lookup table.
-  void CreateLMSLookup(ULONG scale);
+  void CreateLMSLookup(uint32_t scale);
+  //
+  // Create the sRGB linearization lookup table.
+  void CreateSRGBLinearLookup(uint8_t bits);
   //
 public:
   ColorTransformer(void);
   ~ColorTransformer(void);
   //
   // Forwards transform, i.e. RGB->YC_bC_r
-  void ForwardsTransform(class Line *red,class Line *green, class Line *blue,UBYTE bitdepth);
+  void ForwardsTransform(class Line *red,class Line *green, class Line *blue,uint8_t bitdepth);
 };
 ///
 

@@ -28,7 +28,7 @@
 */
 
 /// Includes
-#include "global/types.hpp"
-#include "std/assert.hpp"
+#include <cstdint>
+#include <cassert>
 #include "line.hpp"
 ///

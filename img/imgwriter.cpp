@@ -24,26 +24,27 @@
 
 /// Includes
 #include "imgwriter.hpp"
-#include "std/stdio.hpp"
+#include <cstdio>
+#include <cstdarg>
 #include "dct/line.hpp"
-#include "std/errno.hpp"
+#include <cerrno>
 #include "global/exceptions.hpp"
 ///
 
 /// ImgWriter::ImgWriter
 ImgWriter::ImgWriter(void)
-  : m_ulY(0), m_pFile(NULL), m_pcName(NULL)
+  : m_ulY(0), m_pFile(nullptr), m_pcName(nullptr)
 {
 }
 ///
 
 /// ImgWriter::OpenPGM
-void ImgWriter::OpenPGM(ULONG w,ULONG h,double scale,double offset,const char *basename,...)
+void ImgWriter::OpenPGM(uint32_t w,uint32_t h,float scale,float offset,const char *basename,...)
 {
   char buffer[256];
   va_list args;
 
-  assert(m_pFile == NULL);
+  assert(m_pFile == nullptr);
 
   va_start(args,basename);
   vsnprintf(buffer,255,basename,args);
@@ -73,7 +74,7 @@ void ImgWriter::WriteLine(const class Line *line)
 {
   if (m_ulY == 0) { 
     m_pFile = fopen(m_pcName,"wb");
-    if (m_pFile == NULL) {
+    if (m_pFile == nullptr) {
       ThrowIo("ImgWriter::ImgWriter","unable to open output file");
     }
     // Write header.
@@ -81,17 +82,17 @@ void ImgWriter::WriteLine(const class Line *line)
   }
 
   if (m_ulY < m_ulHeight) {
-    ULONG x;
+    uint32_t x;
     for(x = 0;x < m_ulWidth;x++) {
-      DOUBLE v = line->Get(x) * m_dScale + m_dOffset;
-      UBYTE b;
+      float v = line->Get(x) * m_dScale + m_dOffset;
+      uint8_t b;
 
       if (v < 0) {
 	b = 0;
       } else if (v > 255) {
 	b = 255;
       } else {
-	b = UBYTE(v);
+	b = uint8_t(v);
       }
 
       fputc(b,m_pFile);

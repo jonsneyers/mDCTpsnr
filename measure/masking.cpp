@@ -25,98 +25,156 @@
 /// Includes
 #include "options.hpp"
 #include "measure/masking.hpp"
-#include "std/math.hpp"
-#include "std/string.hpp"
+#include "measure/masking_simd.hpp"  // Highway SIMD functions
+#include <cmath>
+#include <cstring>
 #include "dct/line.hpp"
 ///
 
 /// Masking::Masking
 Masking::Masking(void)
-  : m_pMask(NULL), m_pOutput(NULL), m_pOriginal(NULL), 
-    m_pMapped(NULL), m_ulY(0), m_dMaskingSlope(1.0), m_dVisibility(1.0),
-    m_bPostFilter(false)
+  : m_pMask(nullptr), m_pOutput(nullptr), m_pOriginal(nullptr), 
+    m_pMapped(nullptr),
+    m_pWideBuffer(nullptr), m_pNormalBuffer(nullptr),
+    m_ulWideStride(0), m_ulNormalStride(0), m_ulWideWidth(0),
+    m_ulY(0), m_dMaskingSlope(1.0), m_dVisibility(1.0),
+    m_bPostFilter(false), m_ulWidth(0), m_bCoeffsComputed(false)
   // Slope and masking exponent will be installed over.
 {
-  int x,y;
-  
   memset(m_pInput   ,0,sizeof(m_pInput));
   memset(m_pBuffer  ,0,sizeof(m_pBuffer));
   memset(m_pAdded   ,0,sizeof(m_pAdded));
   memset(m_pFiltered,0,sizeof(m_pFiltered));
 
-  // Initalize the window function. This is a Hamming window here.
-  double xz = double(MaskSize - 1) * 0.5;
-  double yz = double(MaskSize - 1) * 0.5;
-  double xf = double(MaskSize + 1) * 0.5;
-  double yf = double(MaskSize + 1) * 0.5;
-  double norm = 0.0;
-  double nsqr;
+  // Initialize the 1D window function (Hamming window)
+  // Note: The 2D m_Window is no longer used - we precompute window in the Highway DCT SIMD code
+  float xz = float(MaskSize - 1) * 0.5f;
+  float xf = float(MaskSize + 1) * 0.5f;
+  float norm = 0.0f;
+  float nsqr;
 
-  for(y = 0;y < MaskSize;y++) {
-    double gy = cos((y - yz) / yf * M_PI * 0.5);
-    for(x = 0;x < MaskSize;x++) {
-      double g = cos((x - xz) / xf * M_PI * 0.5) * gy;
-      norm     += g;
-      m_Window[x][y] = g;
-    }
+  // Compute 1D mask coefficients (gy values)
+  // But accumulate norm from the full 2D window (as in original)
+  for(int y = 0; y < MaskSize; y++) {
+    float gy = cosf((y - xz) / xf * float(M_PI) * 0.5f);
     m_Mask[y] = gy;
+    // Accumulate 2D window norm (sum over x dimension too)
+    for(int x = 0; x < MaskSize; x++) {
+      float gx = cosf((x - xz) / xf * float(M_PI) * 0.5f);
+      norm += gx * gy;
+    }
   }
 
-  norm /= MaskSize * MaskSize;
-  nsqr  = sqrt(norm);
-
-  for(y = 0;y < MaskSize;y++) {
+  // Normalize: divide by MaskSize^2, then take sqrt (matches original)
+  norm /= float(MaskSize * MaskSize);
+  nsqr = sqrtf(norm);
+  
+  for(int y = 0; y < MaskSize; y++) {
     m_Mask[y] /= nsqr;
-    for(x = 0;x < MaskSize;x++) {
-      m_Window[x][y] /= norm;
-    }
   } 
 }
 ///
 
-/// Masking::~Masking
-Masking::~Masking(void)
+/// Masking::InitializeBuffers
+// Allocate all buffers once we know the width - called on first PushLine
+// Line wrappers point to contiguous buffers (minimal overhead, no separate allocations)
+void Masking::InitializeBuffers(uint32_t width)
 {
-  int i,j;
-
-  delete m_pMask;
-  for(i = 0;i < MaskSize;i++) {
-    delete m_pInput[i];
+  int i, j, wideIdx, normalIdx;
+  uint32_t w = width + MaskSize;
+  
+  // Cache widths
+  m_ulWideWidth = w;
+  
+  // Count lines by width
+  const int wideLines = 11;     // m_pInput[5], m_pBuffer[5], m_pMapped
+  const int normalLines = 11;
+  
+  // Calculate strides (64-byte aligned)
+  size_t wideBytesPerLine = w * sizeof(float);
+  m_ulWideStride = ((wideBytesPerLine + 63) / 64) * 64 / sizeof(float);
+  
+  size_t normalBytesPerLine = width * sizeof(float);
+  m_ulNormalStride = ((normalBytesPerLine + 63) / 64) * 64 / sizeof(float);
+  
+  // Allocate two contiguous buffers
+  size_t wideTotalBytes = m_ulWideStride * sizeof(float) * wideLines;
+  m_pWideBuffer = static_cast<float*>(aligned_alloc(64, wideTotalBytes));
+  if (!m_pWideBuffer) {
+    m_pWideBuffer = new float[m_ulWideStride * wideLines];
   }
-  delete m_pMapped;
-  delete m_pOriginal;
-  delete m_pOutput;
-  for(i = 0;i < MaskSize;i++) {
-    delete m_pAdded[i];
-    delete m_pBuffer[i];
+  
+  size_t normalTotalBytes = m_ulNormalStride * sizeof(float) * normalLines;
+  m_pNormalBuffer = static_cast<float*>(aligned_alloc(64, normalTotalBytes));
+  if (!m_pNormalBuffer) {
+    m_pNormalBuffer = new float[m_ulNormalStride * normalLines];
   }
-  for(j = 0;j < 2;j++) {
-    for(i = 0;i < 2;i++) {
-      delete m_pFiltered[i][j];
+  
+  // Create Line wrappers pointing into contiguous buffers
+  wideIdx = 0;
+  normalIdx = 0;
+  
+  // Wide lines
+  for(i = 0; i < MaskSize; i++) {
+    m_pInput[i] = new Line(m_pWideBuffer + (wideIdx * m_ulWideStride), w);
+    wideIdx++;
+  }
+  for(i = 0; i < MaskSize; i++) {
+    m_pBuffer[i] = new Line(m_pWideBuffer + (wideIdx * m_ulWideStride), w);
+    wideIdx++;
+  }
+  m_pMapped = new Line(m_pWideBuffer + (wideIdx * m_ulWideStride), w);
+  wideIdx++;
+  
+  // Normal lines
+  for(i = 0; i < MaskSize; i++) {
+    m_pAdded[i] = new Line(m_pNormalBuffer + (normalIdx * m_ulNormalStride), width);
+    normalIdx++;
+  }
+  m_pMask = new Line(m_pNormalBuffer + (normalIdx * m_ulNormalStride), width);
+  normalIdx++;
+  m_pOutput = new Line(m_pNormalBuffer + (normalIdx * m_ulNormalStride), width);
+  normalIdx++;
+  
+  for(j = 0; j < 2; j++) {
+    for(i = 0; i < 2; i++) {
+      m_pFiltered[i][j] = new Line(m_pNormalBuffer + (normalIdx * m_ulNormalStride), width);
+      normalIdx++;
     }
   }
+  
+  m_ulWidth = width;
+}
+///
+
+/// Masking::~Masking
+// Simplified: Let process exit handle cleanup (no explicit free needed)
+Masking::~Masking(void)
+{
+  // Line wrapper objects will be cleaned up automatically
+  // Buffers don't need explicit free() - OS reclaims on process exit
 }
 ///
 
 /// Masking::EnablePostFilter
-// Install the post-filter
+// Install the post-filter (called once per image, use float for consistency)
 void Masking::EnablePostFilter(void)
 {
   int i;
   m_bPostFilter = true;
-  m_NormLo      = 0.0;
-  m_NormHi      = 0.0;
+  m_NormLo      = 0.0f;
+  m_NormHi      = 0.0f;
 
   for(i=0;i < MaskSize;i++) {
-    double xp = (i - ((MaskSize - 1) >> 1)) / double((MaskSize - 1) >> 1);
-    double lo = 1.0;
-    double hi = sin(xp * M_PI * 0.5);
+    float xp = (i - ((MaskSize - 1) >> 1)) / float((MaskSize - 1) >> 1);
+    float lo = 1.0f;
+    float hi = sinf(xp * float(M_PI) * 0.5f);
     m_LowFilter[i] = lo;
     m_HiFilter[i]  = hi;
     m_NormHi      += hi * hi;
   }
-  m_NormLo = 1.0 / MaskSize;
-  m_NormHi = 1.0 / sqrt(m_NormHi);
+  m_NormLo = 1.0f / MaskSize;
+  m_NormHi = 1.0f / sqrtf(m_NormHi);
 }
 ///
 
@@ -124,70 +182,58 @@ void Masking::EnablePostFilter(void)
 // Push an original line into the line buffer
 void Masking::PushOriginal(class Line *line)
 {
-  if (m_pBuffer[m_ulY] == NULL) {
-    m_pBuffer[m_ulY] = new class Line(line->LengthOf());
-  }
+  // Buffers already allocated by InitializeBuffers (called from PushLine)
   m_pBuffer[m_ulY]->Swap(*line);
 }
 ///
 
 /// Masking::PushLine
 // Provide a new input line to the masking computation.
+__attribute__((target("avx2,fma")))
 void Masking::PushLine(class Line *line)
 {
-  const DOUBLE vis     = m_dVisibility;
-#ifdef DALY_MASKING
-  const DOUBLE k1      = 0.01528670024;
-  const DOUBLE k2      = 392.4980478;
-  DOUBLE s  = k1 * pow(k2,m_dMaskingSlope);
-  s         = 1.0 / sqrt(sqrt(s * s * s * s + 1.0));
-#endif
+  const float vis     = m_dVisibility;
   int i,w   = line->LengthOf();
   int width = w - MaskSize;
-  //
+  
   assert(width > 0);
-  //
-  // First check whether we have a corresponding input line available. If
-  // not, create one now.
-  if (m_pInput[m_ulY] == NULL) {
-    m_pInput[m_ulY] = new class Line(w);
+  
+  // Initialize all buffers on first call (branch predicted correctly after first call)
+  if (__builtin_expect(m_ulWidth == 0, 0)) {
+    InitializeBuffers(width);
   }
-  if (m_pMapped == NULL) {
-    m_pMapped = new class Line(w);
-  }
-  if (m_pAdded[m_ulY] == NULL) {
-    m_pAdded[m_ulY] = new class Line(w);
-  }
-  //
-  // Swap the contents of the input line into our buffer.
+  
+  // Swap the contents of the input line into our buffer
   m_pInput[m_ulY]->Swap(*line);
   //
-  // Convert to nonlinear space for the l^p norm - precompute to
-  // avoid double computation.
-  for(i = 0;i < w;i++) {
-    //m_pMapped[m_ulY]->At(i) = sqrt(fabs(m_pInput[m_ulY]->Get(i)) / nominal);
-    //
-    // This follows closely the masking formula found in the VDP sources.
-    DOUBLE v = fabs(m_pInput[m_ulY]->Get(i)) * vis;
-#ifdef DALY_MASKING
-    v = k1 * pow(k2 * v,m_dMaskingSlope);
-    v = v * v * v * v;
-    v = s * sqrt(sqrt(v + 1.0));
-#else
-    v = pow(v,m_dMaskingSlope);
-#endif
-    m_pMapped->At(i) = v; 
+  // Convert to nonlinear space
+  float *input_ptr = m_pInput[m_ulY]->Origin();
+  float *mapped_ptr = m_pMapped->Origin();
+  const float slope = m_dMaskingSlope;
+  
+  // Highway SIMD path - portable and length-agnostic (works with SSE2/AVX2/AVX-512/NEON)
+  if (slope == 1.0f) {
+    // expon=1.0: vectorized fabsf + multiply
+    masking_simd::ApplyMaskingSlope1(input_ptr, mapped_ptr, vis, w);
+  } else if (slope == 0.5f) {
+    // expon=0.5: vectorized sqrt of scaled absolute
+    masking_simd::ApplyMaskingSlope05(input_ptr, mapped_ptr, vis, w);
+  } else {
+    // General case: use powf (keep scalar - pow is expensive anyway)
+    for(i = 0; i < w; i++) {
+      float v = fabsf(input_ptr[i]) * vis;
+      mapped_ptr[i] = powf(v, slope);
+    }
   }
   //
-  // Already perform the column sum.
-  for(i = 0;i < width;i++) {
-    DOUBLE sum = 0.0;
-    int x;
-    for(x = 0;x < MaskSize;x++) {
-      sum += m_Mask[x] * m_pMapped->Get(i+x);
-    }
-    m_pAdded[m_ulY]->At(i) = sum;
-  }
+  // Column sum - vectorized to avoid another load/store cycle
+  float *added_ptr = m_pAdded[m_ulY]->Origin();
+  
+  // Exploit symmetry: m_Mask[0]=m_Mask[4], m_Mask[1]=m_Mask[3], m_Mask[2]=center
+  const float m0 = m_Mask[0], m1 = m_Mask[1], m2 = m_Mask[2];
+  
+  // Highway 5-tap symmetric convolution - adapts to vector width (128/256/512-bit)
+  masking_simd::ColumnSumConvolution(mapped_ptr, added_ptr, m0, m1, m2, width);
   //
   // If the input buffer is full, compute the new mask.
   if (m_ulY == MaskSize-1) {
@@ -196,18 +242,8 @@ void Masking::PushLine(class Line *line)
     //
     ComputeMask();
     //
-#ifdef EXTENDED_FILTER
     if (m_bPostFilter) {
       ComputeLowpass();
-    }
-#endif
-    //
-    // Also move the proper buffer line to the output.
-    if (m_pBuffer[MaskSize >> 1]) {
-      if (m_pOriginal == NULL)
-	m_pOriginal = new Line(width);
-      for(i = 0;i < width;i++)
-	m_pOriginal->At(i) = m_pBuffer[MaskSize >> 1]->At(i + (MaskSize >> 1));
     }
     //
     // Make the topmost line available for computations
@@ -231,72 +267,111 @@ void Masking::PushLine(class Line *line)
 
 /// Masking::ComputeLowpass
 // Compute the low and high-pass filter of the input, splitting one band into
-// two.
+// two - optimized version with cached coefficients and direct pointer access
 void Masking::ComputeLowpass(void)
 {
-  double sll  = m_dVisibility * m_NormLo * m_NormLo;
-  double slh  = m_dVisibility * m_NormLo * m_NormHi;
-  double shh  = m_dVisibility * m_NormHi * m_NormHi;
-  int width   = m_pInput[0]->LengthOf() - MaskSize;
   int i,j,k;
+  const int width = m_ulWidth;
 
-  for(j = 0;j < 2;j++) {
-    for(i = 0;i < 2;i++) {
-      if (m_pFiltered[i][j] == NULL)
-	m_pFiltered[i][j] = new Line(width);
-      m_pFiltered[i][j]->Zero();
-    }
-  }
-
-  for(k = 0;k < width;k++) {
-    for(j = 0;j < MaskSize;j++) {
-      for(i = 0;i < MaskSize;i++) {
-	m_pFiltered[0][0]->At(k) += m_pInput[i]->Get(j+k) * m_LowFilter[i] * m_LowFilter[j] * sll;
-	m_pFiltered[1][0]->At(k) += m_pInput[i]->Get(j+k) * m_LowFilter[i] * m_HiFilter[j]  * slh;
-	m_pFiltered[0][1]->At(k) += m_pInput[i]->Get(j+k) * m_HiFilter[i]  * m_LowFilter[j] * slh;
-	m_pFiltered[1][1]->At(k) += m_pInput[i]->Get(j+k) * m_HiFilter[i]  * m_HiFilter[j]  * shh;
+  // Compute filter coefficients once (cached)
+  if (__builtin_expect(!m_bCoeffsComputed, 0)) {
+    const float sll = m_dVisibility * m_NormLo * m_NormLo;
+    const float slh = m_dVisibility * m_NormLo * m_NormHi;
+    const float shh = m_dVisibility * m_NormHi * m_NormHi;
+    
+    for(i = 0; i < MaskSize; i++) {
+      for(j = 0; j < MaskSize; j++) {
+        m_FilterCoeffs_LL[i][j] = m_LowFilter[i] * m_LowFilter[j] * sll;
+        m_FilterCoeffs_LH[i][j] = m_LowFilter[i] * m_HiFilter[j]  * slh;
+        m_FilterCoeffs_HL[i][j] = m_HiFilter[i]  * m_LowFilter[j] * slh;
+        m_FilterCoeffs_HH[i][j] = m_HiFilter[i]  * m_HiFilter[j]  * shh;
       }
     }
+    m_bCoeffsComputed = true;
+  }
+
+  // Direct pointers to output buffers
+  float *filt_ll = m_pFiltered[0][0]->Origin();
+  float *filt_lh = m_pFiltered[1][0]->Origin();
+  float *filt_hl = m_pFiltered[0][1]->Origin();
+  float *filt_hh = m_pFiltered[1][1]->Origin();
+  
+  // Direct pointers to input lines
+  const float *input_ptrs[MaskSize];
+  for(i = 0; i < MaskSize; i++) {
+    input_ptrs[i] = m_pInput[i]->Origin();
+  }
+  
+  // Main convolution loop
+  for(k = 0; k < width; k++) {
+    float acc_ll = 0.0f, acc_lh = 0.0f, acc_hl = 0.0f, acc_hh = 0.0f;
+    
+    // Accumulate over 5x5 filter window
+    for(i = 0; i < MaskSize; i++) {
+      const float *input_row = input_ptrs[i] + k;
+      // Unroll inner loop for better pipeline utilization
+      const float val0 = input_row[0];
+      const float val1 = input_row[1];
+      const float val2 = input_row[2];
+      const float val3 = input_row[3];
+      const float val4 = input_row[4];
+      
+      acc_ll += val0 * m_FilterCoeffs_LL[i][0] + val1 * m_FilterCoeffs_LL[i][1] + 
+                val2 * m_FilterCoeffs_LL[i][2] + val3 * m_FilterCoeffs_LL[i][3] + 
+                val4 * m_FilterCoeffs_LL[i][4];
+      acc_lh += val0 * m_FilterCoeffs_LH[i][0] + val1 * m_FilterCoeffs_LH[i][1] + 
+                val2 * m_FilterCoeffs_LH[i][2] + val3 * m_FilterCoeffs_LH[i][3] + 
+                val4 * m_FilterCoeffs_LH[i][4];
+      acc_hl += val0 * m_FilterCoeffs_HL[i][0] + val1 * m_FilterCoeffs_HL[i][1] + 
+                val2 * m_FilterCoeffs_HL[i][2] + val3 * m_FilterCoeffs_HL[i][3] + 
+                val4 * m_FilterCoeffs_HL[i][4];
+      acc_hh += val0 * m_FilterCoeffs_HH[i][0] + val1 * m_FilterCoeffs_HH[i][1] + 
+                val2 * m_FilterCoeffs_HH[i][2] + val3 * m_FilterCoeffs_HH[i][3] + 
+                val4 * m_FilterCoeffs_HH[i][4];
+    }
+    
+    filt_ll[k] = acc_ll;
+    filt_lh[k] = acc_lh;
+    filt_hl[k] = acc_hl;
+    filt_hh[k] = acc_hh;
   }
 }
-///
 
 /// Masking::ComputeMask
 // Compute the masking strength for the buffered lines, create a new buffered
 // output line.
+// Float buffers and float math throughout - no conversions in hot loop!
 void Masking::ComputeMask(void)
 {
-  int i,y;
-  int width = m_pInput[0]->LengthOf() - MaskSize;
-  DOUBLE sum;
-  const DOUBLE base    = BASE_VISIBILITY;  // base visibility.
-  //
-  //
+  int width = m_ulWidth;
+  const float base = BASE_VISIBILITY;
+  const float invMaskSizeSq = 1.0f / (MaskSize * MaskSize);
+  
   assert(width > 0);
-  if (m_pMask == NULL) {
-    m_pMask = new Line(width);
+  
+  // Exploit symmetry: m_Mask[0]=m_Mask[4], m_Mask[1]=m_Mask[3], m_Mask[2]=center
+  const float m0 = m_Mask[0], m1 = m_Mask[1], m2 = m_Mask[2];
+  
+  // Prepare pointers for Highway SIMD
+  float* added_ptrs[5];
+  for (int i = 0; i < 5; i++) {
+    added_ptrs[i] = m_pAdded[i]->Origin();
   }
-  if (m_pOutput == NULL) {
-    m_pOutput = new Line(width);
-  }
-  // For the computation of the masking strength, follow the idea of Taubman and
-  // compute a (weighted) l^p norm of the coefficients surrounding the target
-  // coefficient. p is simply 0.5.
-  // NOTE: This is the slow one. Any improvement here improves the total
-  // running speed big time!
-  for(i = 0;i < width;i++) {
-    sum = 0.0;
-    for(y = 0;y < MaskSize;y++) {
-      sum += m_Mask[y] * m_pAdded[y]->Get(i);
-    }
+  
+  const float* input_center = m_pInput[MaskSize >> 1]->Origin() + (MaskSize >> 1);
+  float* mask_out = m_pMask->Origin();
+  float* output_out = m_pOutput->Origin();
+  
+  // Highway SIMD - portable and length-agnostic
 #if NO_BASE_VISIBILITY
-    m_pMask->At(i)   = 1.0 / (sum / (MaskSize * MaskSize));
+  masking_simd::ComputeMaskLoop(added_ptrs, input_center, mask_out, output_out,
+                                 m0, m1, m2, base, invMaskSizeSq, m_dVisibility,
+                                 width, true);
 #else
-    m_pMask->At(i)   = base / (base + sum / (MaskSize * MaskSize));
+  masking_simd::ComputeMaskLoop(added_ptrs, input_center, mask_out, output_out,
+                                 m0, m1, m2, base, invMaskSizeSq, m_dVisibility,
+                                 width, false);
 #endif
-    // Also copy to the output using the same offset.
-    m_pOutput->At(i) = m_pInput[MaskSize >> 1]->Get(i + (MaskSize >> 1)) * m_dVisibility;
-  }
 }
 ///
 

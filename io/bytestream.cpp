@@ -28,14 +28,14 @@
 */
 
 /// Includes
-#include "std/string.hpp"
+#include <cstring>
 #include "io/bytestream.hpp"
 ///
 
 /// ByteStream::Read
-LONG ByteStream::Read(UBYTE *buffer,ULONG size)
+int32_t ByteStream::Read(uint8_t *buffer,uint32_t size)
 {
-  ULONG bytesread = 0;
+  uint32_t bytesread = 0;
 
   while (size>=m_ulBufBytes) { // more bytes to read than in the buffer
     if (m_ulBufBytes) {
@@ -69,9 +69,9 @@ LONG ByteStream::Read(UBYTE *buffer,ULONG size)
 ///
 
 /// ByteStream::Write
-LONG ByteStream::Write(const UBYTE *buffer,ULONG size)
+int32_t ByteStream::Write(const uint8_t *buffer,uint32_t size)
 {
-  ULONG byteswritten = 0;
+  uint32_t byteswritten = 0;
 
   while(size>=m_ulBufBytes) { // write more bytes than fit into the buffer?
     if (m_ulBufBytes) {

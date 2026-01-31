@@ -24,7 +24,7 @@
 
 /// Includes
 #include "ediff.hpp"
-#include "std/math.hpp"
+#include <cmath>
 
 
 /// Gamma

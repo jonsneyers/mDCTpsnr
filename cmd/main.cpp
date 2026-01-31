@@ -32,12 +32,15 @@
 #include "img/image.hpp"
 #include "img/imgwriter.hpp"
 #include "io/filestream.hpp"
-#include "std/stdio.hpp"
-#include "std/stdarg.hpp"
-#include "std/stdlib.hpp"
+#include <cstdio>
+#include <cstdarg>
+#include <cstdlib>
 #include "global/exceptions.hpp"
-#include "std/math.hpp"
+#include <cmath>
 #include "measure/pooling.hpp"
+#include "dct/dct_simd.hpp"
+#include <hwy/highway.h>
+#include <hwy/targets.h>
 ///
 
 /// StdExceptionPrinter
@@ -95,8 +98,8 @@ struct Settings {
 public:
   Settings(void)
     : Log(false),
-      m_pcInputName_1(NULL), m_pcInputName_2(NULL),
-      m_pcSaliency_1(NULL), m_pcSaliency_2(NULL),
+      m_pcInputName_1(nullptr), m_pcInputName_2(nullptr),
+      m_pcSaliency_1(nullptr), m_pcSaliency_2(nullptr),
       ncpus(1), logme(0), jnd(false)
   { 
   }
@@ -123,6 +126,7 @@ public:
 void Settings::Usage(const char *progname)
 {
   printf("Usage: %s\n"
+	 "\t[--version]\t: show version and Highway SIMD target information\n"
 	 "\t[-CC #]\t: set the number of CPUs to use in parallel\n"
 	 "\t[-v]   \t: be verbose and write dct/masking and error image (more v's, more information)\n"
 	 "\t[-jnd] \t: output in JND scale rather than mDCTPSNR scale\n"
@@ -131,6 +135,57 @@ void Settings::Usage(const char *progname)
 	 "\tinfile2:\t the distorted file name.\n"
 	 "%s currently understands .ppm and .pgm files.default:ssim\n",
 	 progname,progname);
+}
+///
+
+/// PrintVersion
+// Print version and Highway target information
+static void PrintVersion(void)
+{
+  printf("dctpsnr-highway version 1.0 (Portable SIMD with Google Highway)\n");
+  printf("\n");
+  
+  // Get all compiled targets from a multi-target module
+  std::vector<int64_t> compiled_targets = dct_simd::GetCompiledTargets();
+  
+  // Get the currently dispatched target
+  int64_t current_target = HWY_TARGET;
+  
+  // Show all compiled-in targets
+  printf("Compiled-in Highway targets: [");
+  bool first = true;
+  for (const int64_t target : compiled_targets) {
+    if (!first) printf(", ");
+    
+    // Mark the currently active target
+    if (target == current_target) {
+      printf("*%s*", hwy::TargetName(target));
+    } else {
+      printf("%s", hwy::TargetName(target));
+    }
+    first = false;
+  }
+  printf("]\n");
+  printf("  (* = currently active target in this module)\n");
+  printf("\n");
+  
+  // Show CPU-supported targets  
+  printf("CPU-supported targets: ");
+  first = true;
+  int64_t supported = hwy::SupportedTargets();
+  for (int64_t bit = 0; bit < 64 && supported != 0; bit++) {
+    int64_t test_target = 1LL << bit;
+    if (supported & test_target) {
+      if (!first) printf(", ");
+      printf("%s", hwy::TargetName(test_target));
+      first = false;
+      supported &= ~test_target;
+    }
+  }
+  printf("\n");
+  printf("\n");
+  printf("Dynamic dispatch will choose best available at runtime.\n");
+  printf("Set HWY_DISABLED_TARGETS environment variable to restrict selection.\n");
 }
 ///
 
@@ -156,6 +211,9 @@ void Settings::ParseArgs(int argc,char **argv)
 	// abort parsing options, go
 	// to the file name arguments.
 	break;
+      } else if (!strcmp(arg,"--version")) {
+	PrintVersion();
+	exit(0);
       } else if (!strcmp(arg,"-v")) {
 	logme = 1;
       } else if (!strcmp(arg,"-vv")) {
@@ -165,7 +223,7 @@ void Settings::ParseArgs(int argc,char **argv)
       } else if (!strcmp(arg,"-jnd")) {
 	jnd   = true;
       } else if (!strcmp(arg,"-s")) {
-	if (argv[0] == NULL || argv[1] == NULL) {
+	if (argv[0] == nullptr || argv[1] == nullptr) {
 	  failure = true;
 	} else if (m_pcSaliency_1 || m_pcSaliency_2) {
 	  failure = true;
@@ -221,7 +279,7 @@ int main(int argc,char **argv)
   //
   try {
     class Pooling p;
-    DOUBLE err;
+    float err;
     //
     // parse off the command line arguments here.
     settings.ParseArgs(argc,argv);
@@ -261,7 +319,7 @@ int main(int argc,char **argv)
     }
     //
     if (settings.m_pcSaliency_1 && settings.m_pcSaliency_2) {
-      DOUBLE s1,s2;
+      float s1,s2;
       {
 	class Image sal1,sal2;
 	class FileStream in3,in4;
@@ -285,21 +343,22 @@ int main(int argc,char **argv)
       sal1.OpenPFM(&in3);
       sal2.OpenPFM(&in4);
       //
-      sal1.SetScaling(1.0 / s1);
-      sal2.SetScaling(1.0 / s2);
+      sal1.SetScaling(1.0f / s1);
+      sal2.SetScaling(1.0f / s2);
       //
       err = p.Measure(&img1,&img2,&sal1,&sal2,settings.ncpus,settings.logme);
     } else {
-      err = p.Measure(&img1,&img2,NULL,NULL,settings.ncpus,settings.logme);
+      err = p.Measure(&img1,&img2,nullptr,nullptr,settings.ncpus,settings.logme);
     }
 
     if (settings.jnd) {
-      err = 80.0 - err;
-      if (err < 0.0)
-	err = 0.0;
-      err = 0.000475997802 * pow(err,2.3182);
+      err = 80.0f - err;
+      if (err < 0.0f)
+	err = 0.0f;
+      err = 0.000475997802f * powf(err,2.3182f);
     }
-    printf("%g\n",err);
+    // Use %g to print float with appropriate precision
+    printf("%.9g\n",(double)err);
     //
   } catch(const CodecException &ce) {
     class StdExceptionPrinter ep;

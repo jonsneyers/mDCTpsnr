@@ -32,7 +32,7 @@
 
 /// Includes
 #include "io/bytestream.hpp"
-#include "std/stdio.hpp"
+#include <cstdio>
 ///
 
 /// FileStream
@@ -45,28 +45,28 @@ class FileStream : public ByteStream {
   FILE *m_pFile;
   //
   // Set if the file is open for writing.
-  BOOL  m_bOpenForWrite;
+  bool  m_bOpenForWrite;
   //
   // Methods required for the bytestream implementation.
   // these two have to be replaced by the corresponding
   // member functions of the inherited classses
-  virtual LONG Fill(void);
+  virtual int32_t Fill(void);
   //  
   // Flush the IO buffer.
   virtual void Flush(void);
   //
 public:
-  FileStream(ULONG bufsize = 2048)
-    : ByteStream(bufsize), m_pFile(NULL)
+  FileStream(uint32_t bufsize = 2048)
+    : ByteStream(bufsize), m_pFile(nullptr)
   { }
   //
   virtual ~FileStream(void);
   //
   // Open a stream for input. Throws on error.
-  void OpenForRead(const char *path,ULONG bufsize = 2048);
+  void OpenForRead(const char *path,uint32_t bufsize = 2048);
   //
   // Open a stream for writing. Throws on error.
-  void OpenForWrite(const char *path,ULONG bufsize = 2048);
+  void OpenForWrite(const char *path,uint32_t bufsize = 2048);
   //
   // Close a file (also happens on destruction)
   void Close(void);

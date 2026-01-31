@@ -26,8 +26,8 @@
 #define IMG_IMGWRITER_HPP
 
 /// Includes
-#include "global/types.hpp"
-#include "std/stdio.hpp"
+#include <cstdint>
+#include <cstdio>
 ///
 
 /// Forwards
@@ -38,13 +38,13 @@ class Line;
 // This simple class writes out images given a base name and additional parameters.
 class ImgWriter {
   //
-  ULONG  m_ulWidth;
-  ULONG  m_ulHeight;
-  ULONG  m_ulY;
+  uint32_t  m_ulWidth;
+  uint32_t  m_ulHeight;
+  uint32_t  m_ulY;
   //
   // First scale by scale, then add offset.
-  DOUBLE m_dOffset;
-  DOUBLE m_dScale;
+  float m_dOffset;
+  float m_dScale;
   //
   FILE *m_pFile;
   //
@@ -54,7 +54,7 @@ public:
   ImgWriter(void);
   ~ImgWriter(void);
   //
-  void OpenPGM(ULONG width,ULONG height,double scale,double offset,const char *basename,...);
+  void OpenPGM(uint32_t width,uint32_t height,float scale,float offset,const char *basename,...);
   //
   // Write out a single line.
   void WriteLine(const class Line *line);

@@ -29,8 +29,8 @@
 
 /// Includes
 #include "io/filestream.hpp"
-#include "std/assert.hpp"
-#include "std/errno.hpp"
+#include <cassert>
+#include <cerrno>
 #include "global/exceptions.hpp"
 ///
 
@@ -58,7 +58,7 @@ FileStream::~FileStream(void)
 /// FileStream::Fill
 // Fill the buffer from the stream,
 // return the number of bytes read.
-LONG FileStream::Fill(void)
+int32_t FileStream::Fill(void)
 {
   size_t n;
   assert(m_pFile);
@@ -83,13 +83,13 @@ LONG FileStream::Fill(void)
 // the reset the buffer for the next block to write.
 void FileStream::Flush(void)
 {
-  ULONG bytes;
+  uint32_t bytes;
   assert(m_pFile);
   assert(m_bOpenForWrite == true);
   //
   // Perform only an operation if there is something
   // in the buffer.
-  if ((bytes = ULONG(m_pucBufPtr - m_pucBuffer))) {
+  if ((bytes = uint32_t(m_pucBufPtr - m_pucBuffer))) {
     if (fwrite(m_pucBuffer,1,bytes,m_pFile) != bytes)
       ThrowIo("FileStream::Flush","failed writing bytes to the stream");
   }
@@ -101,19 +101,19 @@ void FileStream::Flush(void)
 
 /// FileStream::OpenForRead
 // Open a filestream for reading binary data.
-void FileStream::OpenForRead(const char *path,ULONG bufsize)
+void FileStream::OpenForRead(const char *path,uint32_t bufsize)
 {
-  assert(m_pFile == NULL);
-  assert(m_pucBuffer == NULL);
+  assert(m_pFile == nullptr);
+  assert(m_pucBuffer == nullptr);
   //
   // Now perform the real open.
   m_pFile = fopen(path,"rb");
-  if (m_pFile == NULL)
+  if (m_pFile == nullptr)
     ThrowIo("FileStream::OpenForRead","failed opening the file for reading");
   //
   // Now initalize the buffer for reading.
   m_ulBufSize     = bufsize;
-  m_pucBuffer     = new UBYTE[bufsize];
+  m_pucBuffer     = new uint8_t[bufsize];
   m_pucBufPtr     = m_pucBuffer;
   m_ulBufBytes    = 0;
   m_ulCounter     = 0;
@@ -123,19 +123,19 @@ void FileStream::OpenForRead(const char *path,ULONG bufsize)
 
 /// FileStream::OpenForWrite
 // Open a filestream for reading binary data.
-void FileStream::OpenForWrite(const char *path,ULONG bufsize)
+void FileStream::OpenForWrite(const char *path,uint32_t bufsize)
 {
-  assert(m_pFile == NULL);
-  assert(m_pucBuffer == NULL);
+  assert(m_pFile == nullptr);
+  assert(m_pucBuffer == nullptr);
   //
   // Now perform the real open.
   m_pFile = fopen(path,"wb");
-  if (m_pFile == NULL)
+  if (m_pFile == nullptr)
     ThrowIo("FileStream::OpenForWrite","failed opening the file for writing");
   //
   // Now initalize the buffer for reading.
   m_ulBufSize     = bufsize;
-  m_pucBuffer     = new UBYTE[bufsize];
+  m_pucBuffer     = new uint8_t[bufsize];
   m_pucBufPtr     = m_pucBuffer;
   m_ulBufBytes    = bufsize;
   m_ulCounter     = 0;
@@ -154,10 +154,10 @@ void FileStream::Close(void)
       Flush();
     // Now close it.
     rc = fclose(m_pFile);
-    m_pFile = NULL;
+    m_pFile = nullptr;
     delete[] m_pucBuffer;
-    m_pucBuffer = NULL;
-    m_pucBufPtr = NULL;
+    m_pucBuffer = nullptr;
+    m_pucBufPtr = nullptr;
     // Check whether we collected an Io error.
     // If so, throw.
     if (rc != 0)

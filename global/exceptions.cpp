@@ -23,10 +23,10 @@
  ************************************************************************************/
 
 /// Includes
-#include "global/types.hpp"
+#include <cstdint>
 #include "global/exceptions.hpp"
-#include "std/stdio.hpp"
-#include "std/stdarg.hpp"
+#include <cstdio>
+#include <cstdarg>
 ///
 
 /// CodecException::PrintException
@@ -85,8 +85,8 @@ void CodecException::PrintException(class ExceptionPrinter &to) const
 
 /// CodecException::CodecException (varargs version)
 CodecException::CodecException(const char *io,const char *who,const char *fmt,...)    
-  : file(NULL), object(who), reason(NULL), 
-    line(0), type(Ex_IoErr), ioerr(io), buffer(NULL)
+  : file(nullptr), object(who), reason(nullptr), 
+    line(0), type(Ex_IoErr), ioerr(io), buffer(nullptr)
 {
   int size;
   char buf[4];
@@ -107,8 +107,8 @@ CodecException::CodecException(const char *io,const char *who,const char *fmt,..
 /// CodecException::CodecException (non-const char)
 CodecException::CodecException(char *,ExType why,const char *who,const char *source,
 			       int where,char *when)
-: file(source), object(who), reason(NULL),
-  line(where), type(why), ioerr(NULL), buffer(new char[strlen(when) + 1])
+: file(source), object(who), reason(nullptr),
+  line(where), type(why), ioerr(nullptr), buffer(new char[strlen(when) + 1])
 { 
   strcpy(buffer,when);
   reason = buffer;
@@ -117,7 +117,7 @@ CodecException::CodecException(char *,ExType why,const char *who,const char *sou
 
 /// CodecException::CodecException (non-const char, IO)
 CodecException::CodecException(int,const char *io,const char *who,char *when)
-  : file(NULL), object(who), reason(NULL), 
+  : file(nullptr), object(who), reason(nullptr), 
     line(0), type(Ex_IoErr), ioerr(io), buffer(new char[strlen(when) + 1])
 { 
   strcpy(buffer,when);
@@ -127,14 +127,14 @@ CodecException::CodecException(int,const char *io,const char *who,char *when)
 
 /// CodecException::CodecException (copy constructor)
 CodecException::CodecException(const CodecException &origin)
-  : buffer(origin.buffer?(new char[strlen(origin.buffer) + 1]):NULL)
+  : buffer(origin.buffer?(new char[strlen(origin.buffer) + 1]):nullptr)
 {  
   file   = origin.file;
   object = origin.object;
   line   = origin.line;
   type   = origin.type;
   ioerr  = origin.ioerr;
-  reason = origin.reason; // might be NULL or not
+  reason = origin.reason; // might be nullptr or not
   if (buffer) {
     strcpy(buffer,origin.buffer);
     reason = buffer;

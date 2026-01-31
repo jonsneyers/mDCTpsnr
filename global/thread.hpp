@@ -26,8 +26,8 @@
 #define GLOBAL_THREAD_HPP
 
 /// Includes
-#include "global/types.hpp"
-#include "std/stdarg.hpp"
+#include <cstdint>
+#include <cstdarg>
 #include <pthread.h>
 #include <semaphore.h>
 ///
